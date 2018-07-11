@@ -1,0 +1,2360 @@
+-- Copyright (c) 2016-present, Facebook, Inc.
+-- All rights reserved.
+--
+-- This source code is licensed under the BSD-style license found in the
+-- LICENSE file in the root directory of this source tree. An additional grant
+-- of patent rights can be found in the PATENTS file in the same directory.
+
+
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NoRebindableSyntax #-}
+{-# LANGUAGE OverloadedStrings #-}
+
+module Duckling.Time.TR.Rules
+  ( rules
+  ) where
+
+import Data.Maybe
+import Data.Text (Text)
+import Prelude
+import qualified Data.Text as Text
+
+import Duckling.Dimensions.Types
+import Duckling.Duration.Helpers (duration)
+import Duckling.Duration.Types (DurationData (..))
+import Duckling.Numeral.Helpers (isNatural, parseInt)
+import Duckling.Numeral.Types (NumeralData (..))
+import Duckling.Ordinal.Types (OrdinalData (..))
+import Duckling.Regex.Types
+import Duckling.Time.Computed
+import Duckling.Time.Helpers
+import Duckling.Time.Types (TimeData (..))
+import Duckling.Types
+import qualified Duckling.Duration.Types as TDuration
+import qualified Duckling.Numeral.Types as TNumeral
+import qualified Duckling.Ordinal.Types as TOrdinal
+import qualified Duckling.Time.Types as TTime
+import qualified Duckling.TimeGrain.Types as TG
+
+-- ruleIntersect :: Rule
+-- ruleIntersect = Rule
+--   { name = 	"Kesişir"
+--   , pattern =
+--     [ Predicate isNotLatent
+--     , Predicate $ or . sequence [isNotLatent, isGrainOfTime TG.Year]
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:Token Time td2:_) ->
+--         Token Time . notLatent <$> intersect td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntersectOf :: Rule
+-- ruleIntersectOf = Rule
+--   { name = 	"\ Tarafından kesişir",\", \"of\", \"from\", \"'s\""
+--   , pattern =
+--     [ Predicate isNotLatent
+--     , regex 	"Nin | 'in | | için | den,"
+--     , Predicate isNotLatent
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:_:Token Time td2:_) ->
+--         Token Time . notLatent <$> intersect td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntersectYear :: Rule
+-- ruleIntersectYear = Rule
+--   { name = 	"\ Tarafından kesişir",\", \"of\", \"from\" for year"
+--   , pattern =
+--     [ Predicate isNotLatent
+--     , regex 	"Nin | dan |,"
+--     , Predicate $ isGrainOfTime TG.Year
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:_:Token Time td2:_) ->
+--         Token Time . notLatent <$> intersect td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleAbsorbOnTime :: Rule
+-- ruleAbsorbOnTime = Rule
+--   { name = "<date> tarihinde"
+--   , pattern =
+--     [ regex 	"tarihinde"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:_) -> Just token
+--       _ -> Nothing
+--   }
+
+-- ruleAbsorbOnADOW :: Rule
+-- ruleAbsorbOnADOW = Rule
+--   { name = "<named-day> günü"
+--   , pattern =
+--     [ regex 	"günü"
+--     , Predicate isADayOfWeek
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:_) -> Just token
+--       _ -> Nothing
+--   }
+
+-- ruleAbsorbInMonthYear :: Rule
+-- ruleAbsorbInMonthYear = Rule
+--   { name = "in|during <named-month>|year"
+--   , pattern =
+--     [ regex 	"In | esnasında"
+--     , Predicate $ or . sequence [isAMonth, isGrainOfTime TG.Year]
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleAbsorbCommaTOD :: Rule
+-- ruleAbsorbCommaTOD = Rule
+--   { name = 	"Emilimi, adını günü"
+--   , pattern =
+--     [ Predicate isADayOfWeek
+--     , regex 	""
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_) -> Just token
+--       _ -> Nothing
+--   }
+
+ruleInstants :: [Rule]
+ruleInstants = mkRuleInstants
+  [ (	"şimdi"    , TG.Second, 0  , "((just|right)\\s*)now|immediately")
+  , (	"bugün"        , TG.Day   , 0  , "todays?|(at this time)"           )
+  , (	"yarın"     , TG.Day   , 1  , "(tmrw?|tomm?or?rows?)"            )
+  , (	"dün"    , TG.Day   , - 1, "yesterdays?"                      )
+  ]
+
+-- ruleNow :: Rule
+-- ruleNow = Rule
+--   { name = 	"Şimdi"
+--   , pattern =
+--     [ regex 	"Şimdi"
+--     ]
+--   , prod = \_ -> tt now
+--   }
+
+-- ruleNextDOW :: Rule
+-- ruleNextDOW = Rule
+--   { name = "this|next <day-of-week>"
+--   , pattern =
+--     [ regex 	"Bu | sonraki"
+--     , Predicate isADayOfWeek
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ predNth 0 True td
+--       _ -> Nothing
+--   }
+
+-- ruleThisTime :: Rule
+-- ruleThisTime = Rule
+--   { name = "this <time>"
+--   , pattern =
+--     [ regex 	"Bu | akım | geliyor"
+--     , Predicate isOkWithThisNext
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ predNth 0 False td
+--       _ -> Nothing
+--   }
+
+-- ruleNextTime :: Rule
+-- ruleNextTime = Rule
+--   { name = "next <time>"
+--   , pattern =
+--     [ regex 	"Sonraki"
+--     , Predicate isOkWithThisNext
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ predNth 0 True td
+--       _ -> Nothing
+--   }
+
+-- ruleLastTime :: Rule
+-- ruleLastTime = Rule
+--   { name = "last <time>"
+--   , pattern =
+--     [ regex 	"(Bu geçmiş | son | önceki)"
+--     , Predicate isOkWithThisNext
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ predNth (- 1) False td
+--       _ -> Nothing
+--   }
+
+-- ruleLastWeekendOfMonth :: Rule
+-- ruleLastWeekendOfMonth = Rule
+--   { name = "last weekend of <named-month>"
+--   , pattern =
+--     [ regex 	"Son \\ s (hafta (\\ s | -?) Uç | wkend) \\ s (içinde | cinsinden)"
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td2:_) -> tt $ predLastOf weekend td2
+--       _ -> Nothing
+--   }
+
+-- ruleTimeBeforeLastAfterNext :: Rule
+-- ruleTimeBeforeLastAfterNext = Rule
+--   { name = "<time> before last|after next"
+--   , pattern =
+--     [ dimension Time
+--     , regex 	"(Önceki son | sonraki)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:Token RegexMatch (GroupMatch (match:_)):_) ->
+--         tt $ predNth 1 (Text.toLower match == 	"Sonraki") td
+--       _ -> Nothing
+--   }
+
+-- ruleLastDOWOfTime :: Rule
+-- ruleLastDOWOfTime = Rule
+--   { name = "last <day-of-week> of <time>"
+--   , pattern =
+--     [ regex 	"son"
+--     , Predicate isADayOfWeek
+--     , regex 	"Nin"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Time td2:_) ->
+--         tt $ predLastOf td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleLastCycleOfTime :: Rule
+-- ruleLastCycleOfTime = Rule
+--   { name = "last <cycle> of <time>"
+--   , pattern =
+--     [ regex 	"son"
+--     , dimension TimeGrain
+--     , regex 	"Nin | in"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token TimeGrain grain:_:Token Time td:_) ->
+--         tt $ cycleLastOf grain td
+--       _ -> Nothing
+--   }
+
+-- ruleLastNight :: Rule
+-- ruleLastNight = Rule
+--   { name = 	"son gece"
+--   , pattern =
+--     [ regex 	"(Geç)? Dün gece"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_) ->
+--         let hours = if Text.toLower match == 	"Geç" then 3 else 6
+--             start = durationBefore (DurationData hours TG.Hour) end
+--             end = cycleNth TG.Day 0
+--         in Token Time . partOfDay . notLatent <$> interval TTime.Open start end
+--       _ -> Nothing
+--   }
+
+-- ruleNthTimeOfTime :: Rule
+-- ruleNthTimeOfTime = Rule
+--   { name = "nth <time> of <time>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , dimension Time
+--     , regex 	"Nin | in"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Ordinal od:Token Time td1:_:Token Time td2:_) -> Token Time .
+--         predNth (TOrdinal.value od - 1) False <$> intersect td2 td1
+--       _ -> Nothing
+--   }
+
+-- ruleTheNthTimeOfTime :: Rule
+-- ruleTheNthTimeOfTime = Rule
+--   { name = "the nth <time> of <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , dimension Time
+--     , regex 	"Nin | in"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Ordinal od:Token Time td1:_:Token Time td2:_) -> Token Time .
+--          predNth (TOrdinal.value od - 1) False <$> intersect td2 td1
+--       _ -> Nothing
+--   }
+
+-- ruleNthTimeAfterTime :: Rule
+-- ruleNthTimeAfterTime = Rule
+--   { name = "nth <time> after <time>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , dimension Time
+--     , regex 	"sonra"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Ordinal od:Token Time td1:_:Token Time td2:_) ->
+--         tt $ predNthAfter (TOrdinal.value od - 1) td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleTheNthTimeAfterTime :: Rule
+-- ruleTheNthTimeAfterTime = Rule
+--   { name = "the nth <time> after <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , dimension Time
+--     , regex 	"sonra"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Ordinal od:Token Time td1:_:Token Time td2:_) ->
+--         tt $ predNthAfter (TOrdinal.value od - 1) td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleYearLatent :: Rule
+-- ruleYearLatent = Rule
+--   { name = 	"Yıl (gizli)"
+--   , pattern =
+--       [ Predicate $
+--         or . sequence [isIntegerBetween (- 10000) 0, isIntegerBetween 25 10000]
+--       ]
+--   , prod = \tokens -> case tokens of
+--       (token:_) -> do
+--         n <- getIntValue token
+--         tt . mkLatent $ year n
+--       _ -> Nothing
+--   }
+
+-- ruleYearADBC :: Rule
+-- ruleYearADBC = Rule
+--   { name = "<year> (bc|ad)"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween (-10000) 10000
+--     , regex 	"(A \\ d \\ |.?.?.?.? B \\ c \\)"
+--     ]
+--   , prod = \case
+--     (token:Token RegexMatch (GroupMatch (ab:_)):_) -> do
+--       y <- getIntValue token
+--       tt . yearADBC $ if Text.head (Text.toLower ab) == 'b' then -y else y
+--     _ -> Nothing
+--   }
+
+-- ruleDOMLatent :: Rule
+-- ruleDOMLatent = Rule
+--   { name = "<day-of-month> (ordinal)"
+--   , pattern = [Predicate isDOMOrdinal]
+--   , prod = \tokens -> case tokens of
+--       (token:_) -> do
+--         n <- getIntValue token
+--         tt . mkLatent $ dayOfMonth n
+--       _ -> Nothing
+--   }
+
+-- ruleTheDOMNumeral :: Rule
+-- ruleTheDOMNumeral = Rule
+--   { name = "the <day-of-month> (number)"
+--   , pattern =
+--     [ regex 	""
+--     , Predicate isDOMInteger
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:_) -> do
+--         n <- getIntValue token
+--         tt . mkLatent $ dayOfMonth n
+--       _ -> Nothing
+--   }
+
+-- ruleTheDOMOrdinal :: Rule
+-- ruleTheDOMOrdinal = Rule
+--   { name = "the <day-of-month> (ordinal)"
+--   , pattern =
+--     [ regex 	""
+--     , Predicate isDOMOrdinal
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:
+--        Token Ordinal OrdinalData{TOrdinal.value = v}:
+--        _) -> tt $ dayOfMonth v
+--       _ -> Nothing
+--   }
+
+-- ruleNamedDOMOrdinal :: Rule
+-- ruleNamedDOMOrdinal = Rule
+--   { name = "<named-month>|<named-day> <day-of-month> (ordinal)"
+--   , pattern =
+--     [ Predicate $ or . sequence [isAMonth, isADayOfWeek]
+--     , Predicate isDOMOrdinal
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:token:_) -> Token Time <$> intersectDOM td token
+--       _ -> Nothing
+--   }
+
+-- ruleMonthDOMNumeral :: Rule
+-- ruleMonthDOMNumeral = Rule
+--   { name = "<named-month> <day-of-month> (non ordinal)"
+--   , pattern =
+--     [ Predicate isAMonth
+--     , Predicate isDOMInteger
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:token:_) -> Token Time <$> intersectDOM td token
+--       _ -> Nothing
+--   }
+
+-- ruleDOMOfMonth :: Rule
+-- ruleDOMOfMonth = Rule
+--   { name = "<day-of-month> (ordinal or number) of <named-month>"
+--   , pattern =
+--     [ Predicate isDOMValue
+--     , regex 	"Nin | in"
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token Time td:_) -> Token Time <$> intersectDOM td token
+--       _ -> Nothing
+--   }
+
+-- ruleDOMMonth :: Rule
+-- ruleDOMMonth = Rule
+--   { name = "<day-of-month> (ordinal or number) <named-month>"
+--   , pattern =
+--     [ Predicate isDOMValue
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:Token Time td:_) -> Token Time <$> intersectDOM td token
+--       _ -> Nothing
+--   }
+
+-- ruleDOMMonthYear :: Rule
+-- ruleDOMMonthYear = Rule
+--   { name = "<day-of-month>(ordinal or number)/<named-month>/year"
+--   , pattern =
+--     [ Predicate isDOMValue
+--     , regex 	"[- / \\ s]"
+--     , Predicate isAMonth
+--     , regex 	"[- / \\ s]"
+--     , regex 	"(\\ d {4})"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:
+--        _:
+--        Token Time td:
+--        _:
+--        Token RegexMatch (GroupMatch (match:_)):
+--        _) -> do
+--          intVal <- parseInt match
+--          dom <- intersectDOM td token
+--          Token Time <$> intersect dom (year intVal)
+--       _ -> Nothing
+--   }
+
+-- ruleDOMOrdinalMonthYear :: Rule
+-- ruleDOMOrdinalMonthYear = Rule
+--   { name = "<day-of-month>(ordinal) <named-month> year"
+--   , pattern =
+--     [ Predicate isDOMOrdinal
+--     , Predicate isAMonth
+--     , regex 	"(\\ d {2,4})"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:Token Time td:Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         intVal <- parseInt match
+--         dom <- intersectDOM td token
+--         Token Time <$> intersect dom (year intVal)
+--       _ -> Nothing
+--   }
+
+-- ruleIdesOfMonth :: Rule
+-- ruleIdesOfMonth = Rule
+--   { name = "the ides of <named-month>"
+--   , pattern =
+--     [ regex 	"Ides? Ait"
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td@TimeData {TTime.form = Just (TTime.Month m)}:_) ->
+--         Token Time <$>
+--           intersect td (dayOfMonth $ if elem m [3, 5, 7, 10] then 15 else 13)
+--       _ -> Nothing
+--   }
+
+-- ruleTODLatent :: Rule
+-- ruleTODLatent = Rule
+--   { name = 	"Zaman günün-(gizli)"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween 0 23
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_) -> do
+--         n <- getIntValue token
+--         tt . mkLatent $ hour (n < 13) n
+--       _ -> Nothing
+--   }
+
+-- ruleAtTOD :: Rule
+-- ruleAtTOD = Rule
+--   { name = "at <time-of-day>"
+--   , pattern =
+--     [ regex 	"At | @"
+--     , Predicate isATimeOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleTODOClock :: Rule
+-- ruleTODOClock = Rule
+--   { name = "<time-of-day> o'clock"
+--   , pattern =
+--     [ Predicate isATimeOfDay
+--     , regex 	"O.?clock"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleHHMM :: Rule
+-- ruleHHMM = Rule
+--   { name = 	"Ss: dd"
+--   , pattern = [regex 	"((: [01] \\ d) | (?:?? 2 [0-3])) [:.] ([0-5] \\ d)"]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (hh:mm:_)):_) -> do
+--         h <- parseInt hh
+--         m <- parseInt mm
+--         tt $ hourMinute True h m
+--       _ -> Nothing
+--   }
+
+-- ruleHHMMLatent :: Rule
+-- ruleHHMMLatent = Rule
+--   { name = 	"Ssdd (gizli)"
+--   , pattern =
+--     [ regex 	"((: [01] \\ d) | (?:?? 2 [0-3])) (?!. \\ d) ([0-5] \\ d)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (hh:mm:_)):_) -> do
+--         h <- parseInt hh
+--         m <- parseInt mm
+--         tt . mkLatent $ hourMinute True h m
+--       _ -> Nothing
+--   }
+
+-- ruleHHMMSS :: Rule
+-- ruleHHMMSS = Rule
+--   { name = 	"Ss: dd: ss"
+--   , pattern = [regex 	"((: [01] \\ d) | (?:?? 2 [0-3])) [:.] [.:] ([0-5] \\ d) ([0-5] \ \ d)"]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (hh:mm:ss:_)):_) -> do
+--         h <- parseInt hh
+--         m <- parseInt mm
+--         s <- parseInt ss
+--         tt $ hourMinuteSecond True h m s
+--       _ -> Nothing
+--   }
+
+-- ruleMilitaryAMPM :: Rule
+-- ruleMilitaryAMPM = Rule
+--   { name = 	"Ssdd (askeri) olduğumu | pm"
+--   , pattern =
+--     [ regex 	"((: 1 p [012] | 0 \\ d)) ([0-5] \\ d)"
+--     , regex 	"([P]) \\.? M? \\.?"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (hh:mm:_)):
+--        Token RegexMatch (GroupMatch (ap:_)):
+--        _) -> do
+--         h <- parseInt hh
+--         m <- parseInt mm
+--         tt . timeOfDayAMPM (Text.toLower ap == 	"A") $ hourMinute True h m
+--       _ -> Nothing
+--   }
+
+-- ruleMilitarySpelledOutAMPM :: Rule
+-- ruleMilitarySpelledOutAMPM = Rule
+--   { name = 	"| Pm askeri numaraları duyuyorum dile"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween 10 12
+--     , Predicate $ isIntegerBetween 1 59
+--     , regex 	"(In) ([p])? (\\ s | \\.) M \\?.?"
+--     ]
+--     , prod = \tokens -> case tokens of
+--         (h:m:Token RegexMatch (GroupMatch (_:ap:_)):_) -> do
+--           hh <- getIntValue h
+--           mm <- getIntValue m
+--           tt . timeOfDayAMPM (Text.toLower ap == 	"A") $ hourMinute True hh mm
+--         _ -> Nothing
+--   }
+
+-- ruleMilitarySpelledOutAMPM2 :: Rule
+-- ruleMilitarySpelledOutAMPM2 = Rule
+--   { name = 	"Altı buçuk 06:00"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween 110 999
+--     , regex 	"(In) ([p])? (\\ s | \\.) M \\?.?"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:Token RegexMatch (GroupMatch (_:ap:_)):_) -> do
+--         n <- getIntValue token
+--         m <- case mod n 100 of
+--           v | v < 60 -> Just v
+--           _          -> Nothing
+--         let h = quot n 100
+--         tt . timeOfDayAMPM (Text.toLower ap == 	"A") $ hourMinute True h m
+--       _ -> Nothing
+--   }
+
+-- ruleTODAMPM :: Rule
+-- ruleTODAMPM = Rule
+--   { name = "<time-of-day> am|pm"
+--   , pattern =
+--     [ Predicate isATimeOfDay
+--     , regex 	"? | (Mi) \\ (in) ([p]) (\\ \\ s).?.?"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td@TimeData{TTime.latent = True}:
+--        Token RegexMatch (GroupMatch (_:ap:_:	"":_)):
+--        _) ->
+--         tt . mkLatent $ timeOfDayAMPM (Text.toLower ap == 	"A") td
+--       (Token Time td@TimeData{TTime.form = Just (TTime.TimeOfDay (Just hours) _)}:
+--        Token RegexMatch (GroupMatch (_:ap:_)):
+--        _) | hours < 13 ->
+--         tt $ timeOfDayAMPM (Text.toLower ap == 	"A") td
+--       _ -> Nothing
+--   }
+
+-- ruleHONumeral :: Rule
+-- ruleHONumeral = Rule
+--   { name = "<hour-of-day> <integer>"
+--   , pattern =
+--     [ Predicate isAnHourOfDay
+--     , Predicate $ isIntegerBetween 1 59
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time TimeData{TTime.form = Just (TTime.TimeOfDay (Just hours) is12H)
+--                           ,TTime.latent = isLatent}:
+--        token:
+--        _) -> do
+--         n <- getIntValue token
+--         if isLatent
+--           then tt . mkLatent $ hourMinute is12H hours n
+--           else tt $ hourMinute is12H hours n
+--       _ -> Nothing
+--   }
+
+-- ruleHODHalf :: Rule
+-- ruleHODHalf = Rule
+--   { name = "<hour-of-day> half"
+--   , pattern =
+--     [ Predicate isAnHourOfDay
+--     , regex 	"yarım"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time TimeData{TTime.form = Just (TTime.TimeOfDay (Just hours) is12H)}:
+--        _) -> tt $ hourMinute is12H hours 30
+--       _ -> Nothing
+--   }
+
+-- ruleHODQuarter :: Rule
+-- ruleHODQuarter = Rule
+--   { name = "<hour-of-day> quarter"
+--   , pattern =
+--     [ Predicate isAnHourOfDay
+--     , regex 	"(A | bir)? Çeyrek"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time TimeData{TTime.form = Just (TTime.TimeOfDay (Just hours) is12H)}:
+--        _) -> tt $ hourMinute is12H hours 15
+--       _ -> Nothing
+--   }
+
+-- ruleNumeralToHOD :: Rule
+-- ruleNumeralToHOD = Rule
+--   { name = "<integer> to|till|before <hour-of-day>"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween 1 59
+--     , regex 	"Için | önce | | dek arasında"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         t <- minutesBefore n td
+--         Just $ Token Time t
+--       _ -> Nothing
+--   }
+
+-- ruleHalfToHOD :: Rule
+-- ruleHalfToHOD = Rule
+--   { name = "half to|till|before <hour-of-day>"
+--   , pattern =
+--     [ regex 	"Yarısı (kadar | kadar | önce | bağımsız)"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time <$> minutesBefore 30 td
+--       _ -> Nothing
+--   }
+
+-- ruleQuarterToHOD :: Rule
+-- ruleQuarterToHOD = Rule
+--   { name = "quarter to|till|before <hour-of-day>"
+--   , pattern =
+--     [ regex 	"?? (A | bir) dörtte (için | kadar | önce | bağımsız)"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time <$> minutesBefore 15 td
+--       _ -> Nothing
+--   }
+
+-- ruleNumeralAfterHOD :: Rule
+-- ruleNumeralAfterHOD = Rule
+--   { name = "integer after|past <hour-of-day>"
+--   , pattern =
+--     [ Predicate $ isIntegerBetween 1 59
+--     , regex 	"Sonra | geçmiş"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         t <- minutesAfter n td
+--         Just $ Token Time t
+--       _ -> Nothing
+--   }
+
+-- ruleHalfAfterHOD :: Rule
+-- ruleHalfAfterHOD = Rule
+--   { name = "half after|past <hour-of-day>"
+--   , pattern =
+--     [ regex 	"Yarısı (sonra | geçmiş)"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time <$> minutesAfter 30 td
+--       _ -> Nothing
+--   }
+
+-- ruleQuarterAfterHOD :: Rule
+-- ruleQuarterAfterHOD = Rule
+--   { name = "quarter after|past <hour-of-day>"
+--   , pattern =
+--     [ regex 	"(A | bir)? Çeyrek (sonra | geçmiş)"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time <$> minutesAfter 15 td
+--       _ -> Nothing
+--   }
+
+-- ruleHalfHOD :: Rule
+-- ruleHalfHOD = Rule
+--   { name = "half <integer> (UK style hour-of-day)"
+--   , pattern =
+--     [ regex 	"yarım"
+--     , Predicate isAnHourOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time <$> minutesAfter 30 td
+--       _ -> Nothing
+--   }
+
+-- ruleMMYYYY :: Rule
+-- ruleMMYYYY = Rule
+--   { name = 	"Aa / yyyy"
+--   , pattern =
+--     [ regex 	"(0 [1-9] |? 1 [0-2]) [/ -] (\\ d {4})"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (mm:yy:_)):_) -> do
+--         y <- parseInt yy
+--         m <- parseInt mm
+--         tt $ yearMonthDay y m 1
+--       _ -> Nothing
+--   }
+
+-- ruleYYYYMMDD :: Rule
+-- ruleYYYYMMDD = Rule
+--   { name = 	"Yyyy-aa-gg"
+--   , pattern =
+--     [ regex 	"(\\ d {2,4}) - (0 [1-9] | 1 [0-2]?) - (3 [01] |? [12] \\ d | 0 [1-9]) "
+--     ]
+--   , prod = \case
+--       (Token RegexMatch (GroupMatch (yy:mm:dd:_)):_) -> do
+--         y <- parseInt yy
+--         m <- parseInt mm
+--         d <- parseInt dd
+--         tt $ yearMonthDay y m d
+--       _ -> Nothing
+--   }
+
+-- ruleYYYYQQ :: Rule
+-- ruleYYYYQQ = Rule
+--   { name = 	"Yyyyqq"
+--   , pattern =
+--     [ regex 	"(\\ d {2,4}) q ([1-4])"
+--     ]
+--   , prod = \case
+--       (Token RegexMatch (GroupMatch (yy:qq:_)):_) -> do
+--         y <- parseInt yy
+--         q <- parseInt qq
+--         tt . cycleNthAfter True TG.Quarter (q - 1) $ year y
+--       _ -> Nothing
+--   }
+
+-- ruleNoonMidnightEOD :: Rule
+-- ruleNoonMidnightEOD = Rule
+--   { name = 	"Öğlen | geceyarısı | EOD | Günün sonu"
+--   , pattern =
+--     [ regex 	"(Öğlen | midni (GHT | te) (|) (EOD |? Ucu () gün))"
+--     ]
+--   , prod = \case
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> tt . hour False $
+--         if Text.toLower match == 	"öğle vakti" then 12 else 0
+--       _ -> Nothing
+--   }
+
+-- rulePartOfDays :: Rule
+-- rulePartOfDays = Rule
+--   { name = 	"Günlerin bir parçası"
+--   , pattern =
+--     [ regex 	"(Sabah | sonra noo n (imsi) |?? Akşamı | gece |? (At) öğle)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         let (start, end) = case Text.toLower match of
+--               	"sabah"  -> (hour False 4, hour False 12)
+--               	"akşam"  -> (hour False 18, hour False 0)
+--               	"gece"    -> (hour False 18, hour False 0)
+--               	"öğle yemeği"    -> (hour False 12, hour False 14)
+--               	"öğle yemeğinde" -> (hour False 12, hour False 14)
+--               _          -> (hour False 12, hour False 19)
+--         td <- interval TTime.Open start end
+--         tt . partOfDay $ mkLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleEarlyMorning :: Rule
+-- ruleEarlyMorning = Rule
+--   { name = 	"sabahın erken saatleri"
+--   , pattern =
+--     [ regex 	"((Içinde |) saat) erken? Sabah"
+--     ]
+--   , prod = \_ -> Token Time . partOfDay . mkLatent <$>
+--       interval TTime.Open (hour False 4) (hour False 9)
+--   }
+
+-- rulePODIn :: Rule
+-- rulePODIn = Rule
+--   { name = "in|during the <part-of-day>"
+--   , pattern =
+--     [ regex 	"(|) (Sırasında)?"
+--     , Predicate isAPartOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- rulePODThis :: Rule
+-- rulePODThis = Rule
+--   { name = "this <part-of-day>"
+--   , pattern =
+--     [ regex 	"bu"
+--     , Predicate isAPartOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> Token Time . partOfDay . notLatent <$>
+--         intersect (cycleNth TG.Day 0) td
+--       _ -> Nothing
+--   }
+
+-- ruleTonight :: Rule
+-- ruleTonight = Rule
+--   { name = 	"Bu gece"
+--   , pattern = [regex 	"(Geç) toni (GHT | gth | te)? S?"]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         let today = cycleNth TG.Day 0
+--             h = if Text.toLower match == 	"Geç" then 21 else 18
+--         evening <- interval TTime.Open (hour False h) (hour False 0)
+--         Token Time . partOfDay . notLatent <$> intersect today evening
+--       _ -> Nothing
+--   }
+
+-- ruleAfterPartofday :: Rule
+-- ruleAfterPartofday = Rule
+--   { name = 	"Sonra öğle / iş / okul"
+--   , pattern =
+--     [ regex 	"[\\ s -] sonra? (Öğle | Şirketler | okul)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         (start, end) <- case Text.toLower match of
+--           	"öğle yemeği"  -> Just (hour False 13, hour False 17)
+--           	"iş"   -> Just (hour False 17, hour False 21)
+--           	"Okul" -> Just (hour False 15, hour False 21)
+--           _        -> Nothing
+--         td <- interval TTime.Open start end
+--         Token Time . partOfDay . notLatent <$>
+--           intersect (cycleNth TG.Day 0) td
+--       _ -> Nothing
+--   }
+
+-- -- Since part of days are latent, general time intersection is blocked
+-- ruleTimePOD :: Rule
+-- ruleTimePOD = Rule
+--   { name = "<time> <part-of-day>"
+--   , pattern =
+--     [ dimension Time
+--     , Predicate isAPartOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:Token Time pod:_) -> Token Time <$> intersect pod td
+--       _ -> Nothing
+--   }
+
+-- rulePODofTime :: Rule
+-- rulePODofTime = Rule
+--   { name = "<part-of-day> of <time>"
+--   , pattern =
+--     [ Predicate isAPartOfDay
+--     , regex 	"Nin"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time pod:_:Token Time td:_) -> Token Time <$> intersect pod td
+--       _ -> Nothing
+--   }
+
+-- ruleWeekend :: Rule
+-- ruleWeekend = Rule
+--   { name = 	"hafta sonu"
+--   , pattern =
+--     [ regex 	"| - | s () sonu? Wkend hafta (\\ s)?"
+--     ]
+--   , prod = \_ -> tt $ mkOkForThisNext weekend
+--   }
+
+-- ruleSeason :: Rule
+-- ruleSeason = Rule
+--   { name = "last|this|next <season>"
+--   , pattern =
+--     [ regex 	"(Bu | akım | sonraki | son | geçmiş | önceki)? Mevsimler"
+--     ]
+--   , prod = \case
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         n <- case Text.toLower match of
+--                	"bu" -> Just 0
+--                	"Geçerli" -> Just 0
+--                	"son" -> Just (-1)
+--                	"Geçtiğimiz" -> Just (-1)
+--                	"önceki" -> Just (-1)
+--                	"Sonraki" -> Just 1
+--                _ -> Nothing
+--         tt $ predNth n False season
+--       _ -> Nothing
+--   }
+
+ruleSeasons :: [Rule]
+ruleSeasons = mkRuleSeasons
+  [ ( 	"yaz"     , "yaz"     , monthDay  6 21, monthDay  9 23 )
+  , ( 	"sonbahar", "sonbahar", monthDay  9 23, monthDay 12 21 )
+  , ( 	"kış"     , "kış"     , monthDay 12 21, monthDay  3 20 )
+  , ( 	"ilkbahar", "ilkbahar", monthDay  3 20, monthDay  6 21 )
+  ]
+
+-- ruleTODPrecision :: Rule
+-- ruleTODPrecision = Rule
+--   { name = "<time-of-day> sharp|exactly"
+--   , pattern =
+--     [ Predicate isATimeOfDay
+--     , regex 	"(Keskin | tam | -? Imsi | Yaklaşık)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- rulePrecisionTOD :: Rule
+-- rulePrecisionTOD = Rule
+--   { name = "about|exactly <time-of-day>"
+--   , pattern =
+--     [ regex 	"(Yaklaşık | tam olarak etrafında | | Yaklaşık)"
+--     , Predicate $ isGrainFinerThan TG.Year
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalMonthDDDD :: Rule
+-- ruleIntervalMonthDDDD = Rule
+--   { name = "<month> dd-dd (interval)"
+--   , pattern =
+--     [ Predicate isAMonth
+--     , Predicate isDOMValue
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isDOMValue
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:
+--        token1:
+--        _:
+--        token2:
+--        _) -> do
+--         dom1 <- intersectDOM td token1
+--         dom2 <- intersectDOM td token2
+--         Token Time <$> interval TTime.Closed dom1 dom2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalDDDDMonth :: Rule
+-- ruleIntervalDDDDMonth = Rule
+--   { name = "dd-dd <month> (interval)"
+--   , pattern =
+--     [ Predicate isDOMValue
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isDOMValue
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token1:
+--        _:
+--        token2:
+--        Token Time td:
+--        _) -> do
+--         dom1 <- intersectDOM td token1
+--         dom2 <- intersectDOM td token2
+--         Token Time <$> interval TTime.Closed dom1 dom2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalFromMonthDDDD :: Rule
+-- ruleIntervalFromMonthDDDD = Rule
+--   { name = "from <month> dd-dd (interval)"
+--   , pattern =
+--     [ regex 	"Adresinden"
+--     , Predicate isAMonth
+--     , Predicate isDOMValue
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isDOMValue
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:
+--        Token Time td:
+--        token1:
+--        _:
+--        token2:
+--        _) -> do
+--         dom1 <- intersectDOM td token1
+--         dom2 <- intersectDOM td token2
+--         Token Time <$> interval TTime.Closed dom1 dom2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalFromDDDDMonth :: Rule
+-- ruleIntervalFromDDDDMonth = Rule
+--   { name = "from <day-of-month> (ordinal or number) to <day-of-month> (ordinal or number) <named-month> (interval)"
+--   , pattern =
+--     [ regex 	"Adresinden"
+--     , Predicate isDOMValue
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isDOMValue
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:
+--        token1:
+--        _:
+--        token2:
+--        Token Time td:
+--        _) -> do
+--         dom1 <- intersectDOM td token1
+--         dom2 <- intersectDOM td token2
+--         Token Time <$> interval TTime.Closed dom1 dom2
+--       _ -> Nothing
+--   }
+
+-- -- Blocked for :latent time. May need to accept certain latents only, like hours
+-- ruleIntervalDash :: Rule
+-- ruleIntervalDash = Rule
+--   { name = "<datetime> - <datetime> (interval)"
+--   , pattern =
+--     [ Predicate isNotLatent
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isNotLatent
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalFrom :: Rule
+-- ruleIntervalFrom = Rule
+--   { name = "from <datetime> - <datetime> (interval)"
+--   , pattern =
+--     [ regex 	"Adresinden"
+--     , dimension Time
+--     , regex 	"\\ - |?? Th ru | | kadar | (l) til (me)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalBetween :: Rule
+-- ruleIntervalBetween = Rule
+--   { name = "between <time> and <time>"
+--   , pattern =
+--     [ regex 	"arasında"
+--     , dimension Time
+--     , regex 	"ve"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- -- Specific for time-of-day, to help resolve ambiguities
+-- ruleIntervalTODDash :: Rule
+-- ruleIntervalTODDash = Rule
+--   { name = "<time-of-day> - <time-of-day> (interval)"
+--   , pattern =
+--     [ Predicate $ and . sequence [isNotLatent, isATimeOfDay]
+--     , regex 	"\\ - |:??? | Th ru | | kadar | (l) til (me)"
+--     , Predicate isATimeOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalTODFrom :: Rule
+-- ruleIntervalTODFrom = Rule
+--   { name = "from <time-of-day> - <time-of-day> (interval)"
+--   , pattern =
+--     [ regex 	"(Daha sonra daha | den | (in [\\ s -]) arasında?)"
+--     , Predicate isATimeOfDay
+--     , regex 	"((Ama) daha önce?) | \\ - |?? Th ru | | kadar | (l) til (me)"
+--     , Predicate isATimeOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- -- We can't take generic TOD (e.g. 	"06:30-09:00").
+-- -- Those are handled by other rules.
+-- ruleIntervalTODAMPM :: Rule
+-- ruleIntervalTODAMPM = Rule
+--  { name = "hh(:mm) - <time-of-day> am|pm"
+--  , pattern =
+--    [ regex 	"(?: Dan) ((: [01] \\ d) | (?:?? 2 [0-3]))?? ([:.] ([0-5] \\ d))"
+--    , regex 	"\\ - |:??? | Th ru | | kadar | (l) til (me)"
+--    , Predicate isATimeOfDay
+--    , regex 	"(In) ([p])? (\\ s | \\.) M \\?.?"
+--    ]
+--  , prod = \tokens -> case tokens of
+--      (Token RegexMatch (GroupMatch (hh:_:mm:_)):
+--       _:
+--       Token Time td2:
+--       Token RegexMatch (GroupMatch (_:ap:_)):
+--       _) -> do
+--        h <- parseInt hh
+--        let ampm = Text.toLower ap == 	"A"
+--            td1 = case parseInt mm of
+--              Just m -> hourMinute True h m
+--              Nothing -> hour True h
+--        Token Time <$>
+--          interval TTime.Closed (timeOfDayAMPM ampm td1) (timeOfDayAMPM ampm td2)
+--      _ -> Nothing
+--  }
+
+-- ruleIntervalTODBetween :: Rule
+-- ruleIntervalTODBetween = Rule
+--   { name = "between <time-of-day> and <time-of-day> (interval)"
+--   , pattern =
+--     [ regex 	"arasında"
+--     , Predicate isATimeOfDay
+--     , regex 	"ve"
+--     , Predicate isATimeOfDay
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Time td2:_) ->
+--         Token Time <$> interval TTime.Closed td1 td2
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalBy :: Rule
+-- ruleIntervalBy = Rule
+--   { name = "by <time>"
+--   , pattern =
+--     [ regex 	"tarafından"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) ->
+--         Token Time <$> interval TTime.Open (cycleNth TG.Second 0) td
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalByTheEndOf :: Rule
+-- ruleIntervalByTheEndOf = Rule
+--   { name = "by the end of <time>"
+--   , pattern =
+--     [ regex 	"Nin ()? Sonuna kadar"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) ->
+--         Token Time <$> interval TTime.Closed (cycleNth TG.Second 0) td
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalUntilTime :: Rule
+-- ruleIntervalUntilTime = Rule
+--   { name = "until <time>"
+--   , pattern =
+--     [ regex 	"(Zaman | bazen?)? (Önce |? Til (me) (l) |? Aracılığıyla | kadar)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt . withDirection TTime.Before $ notLatent td
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalAfterFromSinceTime :: Rule
+-- ruleIntervalAfterFromSinceTime = Rule
+--   { name = "from|since|after <time>"
+--   , pattern =
+--     [ regex 	"Adresinden | beri | (her zaman |? Bazen)? Sonra"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td:_) -> tt . withDirection TTime.After $ notLatent td
+--       _ -> Nothing
+--   }
+
+ruleDaysOfWeek :: [Rule]
+ruleDaysOfWeek = mkRuleDaysOfWeek
+  [ ( 	"Pazartesi"   , "mondays?|mon\\.?"         )
+  , ( 	"Salı"  , "tuesdays?|tues?\\.?"      )
+  , ( 	"Çarşamba", "wed?nesdays?|wed\\.?"     )
+  , ( 	"Perşembe" , "thursdays?|thu(rs?)?\\.?" )
+  , ( 	"Cuma"   , "fridays?|fri\\.?"         )
+  , ( 	"Cumartesi" , "saturdays?|sat\\.?"       )
+  , ( 	"Pazar"   , "sundays?|sun\\.?"         )
+  ]
+
+ruleMonths :: [Rule]
+ruleMonths = mkRuleMonthsWithLatent
+  [ ( 	"Ocak"  , "january|jan\\.?"    , False )
+  , ( 	"Şubat" , "february|feb\\.?"   , False )
+  , ( 	"Mart"    , "march|mar\\.?"      , False )
+  , ( 	"Nisan"    , "april|apr\\.?"      , False )
+  , ( 	"Mayıs ayı"      , "may"                , True  )
+  , ( 	"Haziran"     , "june|jun\\.?"       , False )
+  , ( 	"Temmuz"     , "july|jul\\.?"       , False )
+  , ( 	"Ağustos"   , "august|aug\\.?"     , False )
+  , ( 	"Eylül", "september|sept?\\.?", False )
+  , ( 	"Ekim"  , "october|oct\\.?"    , False )
+  , ( 	"Kasım" , "november|nov\\.?"   , False )
+  , ( 	"Aralık" , "december|dec\\.?"   , False )
+  ]
+
+-- rulePartOfMonth :: Rule
+-- rulePartOfMonth = Rule
+--   { name = "part of <named-month>"
+--   , pattern =
+--     [ regex 	"(Erken | ortası | geç) -? (Bir)?"
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):Token Time td:_) -> do
+--         (sd, ed) <- case Text.toLower match of
+--           	"erken" -> Just (1, 10)
+--           	"orta"   -> Just (11, 20)
+--           	"geç"  -> Just (21, -1)
+--           _       -> Nothing
+--         start <- intersect td $ dayOfMonth sd
+--         end <- if ed /= -1
+--           then intersect td $ dayOfMonth ed
+--           else Just $ cycleLastOf TG.Day td
+--         Token Time <$> interval TTime.Open start end
+--       _ -> Nothing
+--   }
+
+-- ruleEndOrBeginningOfMonth :: Rule
+-- ruleEndOrBeginningOfMonth = Rule
+--   { name = "at the beginning|end of <named-month>"
+--   , pattern =
+--     [ regex 	"(At)? | Ait (başlangıç ​​bitiş)"
+--     , Predicate isAMonth
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (_:match:_)):Token Time td:_) -> do
+--         (sd, ed) <- case Text.toLower match of
+--           	"başlangıç" -> Just (1, 10)
+--           	"son"       -> Just (21, -1)
+--           _           -> Nothing
+--         start <- intersect td $ dayOfMonth sd
+--         end <- if ed /= -1
+--           then intersect td $ dayOfMonth ed
+--           else Just $ cycleLastOf TG.Day td
+--         Token Time <$> interval TTime.Open start end
+--       _ -> Nothing
+--   }
+
+-- ruleEndOfMonth :: Rule
+-- ruleEndOfMonth = Rule
+--   { name = 	"ayın sonu"
+--   , pattern = [ regex 	"(() Tarafından |? (At))? (EOM |? () Ay sonu)" ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_)
+--         | (Just start, Just end) <- parsed ->
+--           Token Time <$> interval TTime.Open start end
+--         where
+--           cycleMonth = cycleNth TG.Month
+--           parsed = if 	"tarafından" `Text.isPrefixOf` Text.toLower match
+--             then
+--               ( Just $ cycleNth TG.Second 0
+--               , intersect (dayOfMonth 1) $ cycleMonth 1)
+--             else
+--               ( intersect (dayOfMonth 21) $ cycleMonth 0
+--               , Just $ cycleLastOf TG.Day $ cycleMonth 0)
+--       _ -> Nothing
+--   }
+
+-- ruleBeginningOfMonth :: Rule
+-- ruleBeginningOfMonth = Rule
+--   { name = 	"Ayın başında"
+--   , pattern = [ regex 	"(() At?) (BOM |? () Ayın başlangıcı)?" ]
+--   , prod = \_ -> do
+--       start <- intersect (dayOfMonth 1) $ cycleNth TG.Month 0
+--       end <- intersect (dayOfMonth 10) $ cycleNth TG.Month 0
+--       Token Time <$> interval TTime.Open start end
+--   }
+
+-- ruleEndOrBeginningOfYear :: Rule
+-- ruleEndOrBeginningOfYear = Rule
+--   { name = "at the beginning|end of <year>"
+--   , pattern =
+--     [ regex 	"(At)? | Ait (başlangıç ​​bitiş)"
+--     , Predicate $ isGrainOfTime TG.Year
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (_:match:_)):Token Time td:_) -> do
+--         (sd, ed) <- case Text.toLower match of
+--           	"başlangıç" -> Just (1, 4)
+--           	"son"       -> Just (9, -1)
+--           _           -> Nothing
+--         start <- intersect td $ month sd
+--         end <- if ed /= -1
+--           then intersect td $ cycleLastOf TG.Month $ month ed
+--           else cycleNthAfter False TG.Year 1 <$> intersect td (month 1)
+--         Token Time <$> interval TTime.Open start end
+--       _ -> Nothing
+--   }
+
+-- ruleEndOfYear :: Rule
+-- ruleEndOfYear = Rule
+--   { name = 	"yılın sonu"
+--   , pattern = [ regex 	"(() Tarafından |? (At))? (EOY |? () Yılın sonu)" ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):_) -> do
+--         start <- std
+--         end <- intersect (month 1) $ cycleYear 1
+--         Token Time <$> interval TTime.Open start end
+--           where
+--             std = if 	"tarafından" `Text.isPrefixOf` Text.toLower match
+--               then Just $ cycleNth TG.Second 0
+--               else intersect (month 9) $ cycleYear 0
+--             cycleYear = cycleNth TG.Year
+--       _ -> Nothing
+--   }
+
+-- ruleBeginningOfYear :: Rule
+-- ruleBeginningOfYear = Rule
+--   { name = 	"Yılın başlangıcı"
+--   , pattern = [ regex 	"((At)?) (BOY |? () Yılın başlangıcı)?" ]
+--   , prod = \_ -> do
+--       start <- intersect (month 1) $ cycleNth TG.Year 0
+--       end <- intersect (month 4) $ cycleNth TG.Year 0
+--       Token Time <$> interval TTime.Open start end
+--   }
+
+-- ruleEndOrBeginningOfWeek :: Rule
+-- ruleEndOrBeginningOfWeek = Rule
+--   { name = "at the beginning|end of <week>"
+--   , pattern =
+--     [ regex 	"(At)? | Ait (başlangıç ​​bitiş)"
+--     , Predicate $ isGrainOfTime TG.Week
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (_:match1:_)):Token Time td:_) -> do
+--         (sd, ed) <- case Text.toLower match1 of
+--           	"başlangıç" -> Just (1, 3)
+--           	"son"       -> Just (5, 7)
+--           _           -> Nothing
+--         start <- intersect td $ dayOfWeek sd
+--         end <- intersect td $ dayOfWeek ed
+--         Token Time <$> interval TTime.Open start end
+--       _ -> Nothing
+--   }
+
+-- rulePeriodicHolidays :: [Rule]
+-- rulePeriodicHolidays = mkRuleHolidays
+--   -- Fixed dates, year over year
+--   [ ( 	"Afrika Günü", "africa(n (freedom|liberation))? day", monthDay 5 25 )
+--   , ( 	"Afrika Sanayileşme Günü", "africa industrialization day", monthDay 11 20 )
+--   , ( 	"Tüm azizler günü", "all saints' day", monthDay 11 1 )
+--   , ( 	"Bütün ruhlar Günü", "all souls' day", monthDay 11 2 )
+--   , ( 	"Nisan Bir", "(april|all) fool'?s('? day)?", monthDay 4 1 )
+--   , ( 	"Arap Dili Günü", "arabic language day", monthDay 12 18 )
+--   , ( 	"Mary'nin varsayımı", "assumption of mary", monthDay 8 15 )
+--   , ( 	"Boxing Day", "boxing day", monthDay 12 26 )
+--   , ( 	"Çin Dili Günü", "chinese language day", monthDay 4 20 )
+--   , ( 	"Noel", "(xmas|christmas)( day)?", monthDay 12 25 )
+--   , ( 	"Noel arifesi", "(xmas|christmas)( day)?('s)? eve", monthDay 12 24 )
+--   , ( 	"Kimyasal Warfare tüm Kurbanlarını Anma Günü", "day of remembrance for all victims of chemical warfare", monthDay 4 29 )
+--   , ( 	"Ruanda Soykırım Kurbanlarını Anma Günü", "day of remembrance of the victims of the rwanda genocide", monthDay 4 7 )
+--   , ( 	"Denizciler Günü", "day of the seafarer", monthDay 6 25 )
+--   , ( 	"Dünya Günü", "earth day", monthDay 4 22 )
+--   , ( 	"İngilizce Dil Günü", "english language day", monthDay 4 23 )
+--   , ( 	"Epifani", 	"Epifani", monthDay 1 6 )
+--   , ( 	"Assisi St Francis Bayramı", "feast of st\\.? francis of assisi", monthDay 10 4 )
+--   , ( 	"Meryem'in hamile kalışının", "feast of the immaculate conception", monthDay 12 8 )
+--   , ( 	"Ebeveynler Küresel Günü", "global day of parents", monthDay 6 1 )
+--   , ( 	"Cadılar Bayramı", "hall?owe?en( day)?", monthDay 10 31 )
+--   , ( 	"İnsan hakları günü", "human rights? day", monthDay 12 10 )
+--   , ( 	"Uluslararası Albinizm Farkındalık Günü", "international albinism awareness day", monthDay 6 13 )
+--   , ( 	"Uluslararası Yolsuzlukla Mücadele Günü", "international anti(\\-|\\s)corruption day", monthDay 12 9 )
+--   , ( 	"Uluslararası Asteroid Günü", "international asteroid day", monthDay 6 30 )
+--   , ( 	"Uluslararası Biseksüellik Günü Kutlama", "international celebrate bisexuality day", monthDay 9 23 )
+--   , ( 	"Uluslararası Çernobil Afet Anma Günü", "international chernobyl disaster remembrance day", monthDay 4 26 )
+--   , ( 	"Uluslararası Sivil Havacılık Günü", "international civil aviation day", monthDay 12 7 )
+--   , ( 	"Dünya Gümrük Günü", "international customs day", monthDay 1 26 )
+--   , ( 	"Uluslararası Mücadele Günü Uyuşturucu Kullanımı ve Kaçakçılığı", "international day against drug abuse and illicit trafficking", monthDay 6 26 )
+--   , ( 	"Nükleer Testler karşı Uluslararası Günü", "international day against nuclear tests", monthDay 8 29 )
+--   , ( 	"Biyolojik Çeşitlilik Uluslararası Günü", "international day for biological diversity|world biodiversity day", monthDay 5 22 )
+--   , ( 	"Anıtlar ve Sitler Günü", "international day for monuments and sites", monthDay 4 18 )
+--   , ( 	"Savaş ve Silahlı Çatışma Çevrenin İstismarı Önleme Günü", "international day for preventing the exploitation of the environment in war and armed conflict", monthDay 11 6 )
+--   , ( 	"Güney-Güney İşbirliği Günü", "international day for south(\\-|\\s)south cooperation", monthDay 9 12 )
+--   , ( 	"Hoşgörü Günü", "international day for tolerance", monthDay 11 16 )
+--   , ( 	"Kölelik Kaldırılması için Uluslararası Günü", "international day for the abolition of slavery", monthDay 12 2 )
+--   , ( 	"Uluslararası Irk Ayrımı İle Mücadele Günü", "international day for the elimination of racial discrimination", monthDay 3 21 )
+--   , ( 	"Çatışma Sırasında Cinsel Şiddetin Ortadan Kaldırılması İçin Uluslararası Günü", "international day for the elimination of sexual violence in conflict", monthDay 6 19 )
+--   , ( 	"Kadına yönelik şiddete karşı uluslararası mücadele günü", "international day for the elimination of violence against women", monthDay 11 25 )
+--   , ( 	"Dünya Yoksullukla Mücadele Günü", "international day for the eradication of poverty", monthDay 10 17 )
+--   , ( 	"Ozon Tabakasını Koruma Günü", "international day for the preservation of the ozone Layer", monthDay 9 16 )
+--   , ( 	"Uluslararası Köle Ticareti Anma Günü ve onun kaldırılması", "international day for the remembrance of the slave trade and its abolition", monthDay 8 23 )
+--   , ( 	"Brüt İnsan Hakları İhlalleri ile ilgili Truth Hakkı ve Kurbanlarının Haysiyet Uluslararası Günü", "international day for the right to the truth concerning gross human rights violations and for the dignity of victims", monthDay 3 24 )
+--   , ( 	"Nükleer Silahların Toplam Önlenmesi İçin Uluslararası Günü", "international day for the total elimination of nuclear weapons", monthDay 9 26 )
+--   , ( 	"İşkence Kurbanlarına Destek Günü", "international day in support of victims of torture", monthDay 6 26 )
+--   , ( 	"Charity Uluslararası Günü", "international day of charity", monthDay 9 5 )
+--   , ( 	"Yahudi Soykırımı Kurbanlarını Anma Uluslararası Günü", "international day of commemoration in memory of the victims of the holocaust", monthDay 1 27 )
+--   , ( 	"Uluslararası Demokrasi Günü", "international day of democracy", monthDay 9 15 )
+--   , ( 	"Dünya Engelliler Günü", "international day of disabled persons", monthDay 12 3 )
+--   , ( 	"Aileleri Uluslararası Günü", "international day of families", monthDay 5 15 )
+--   , ( 	"Aile Havaleler Uluslararası Günü", "international day of family remittances", monthDay 6 16 )
+--   , ( 	"Uluslararası Orman Günü", "international day of forests", monthDay 3 21 )
+--   , ( 	"Dostluk Günü", "international day of friendship", monthDay 7 30 )
+--   , ( 	"Mutluluk Günü", "international day of happiness", monthDay 3 20 )
+--   , ( 	"İnsan Uzay Uçuş Günü", "international day of human space flight", monthDay 4 12 )
+--   , ( 	"Saldırganlık Masum Çocuklar Mağdurları Günü", "international day of innocent children victims of aggression", monthDay 6 4 )
+--   , ( 	"Şiddete Hayır Günü", "international day of non(\\-|\\s)violence", monthDay 10 2 )
+--   , ( 	"Uluslararası Nevruz Günü", "international day of nowruz", monthDay 3 21 )
+--   , ( 	"Dünya Yaşlılar Günü", "international day of older persons", monthDay 10 1 )
+--   , ( 	"Dünya Barış Günü", "international day of peace", monthDay 9 21 )
+--   , ( 	"Engelli Uluslararası Günü", "international day of persons with disabilities", monthDay 12 3 )
+--   , ( 	"Kölelik Kurbanlarını Anma Uluslararası Günü ve Transatlantik Köle Ticareti", "international day of remembrance of slavery victims and the transatlantic slave trade", monthDay 3 25 )
+--   , ( 	"Kırsal Kadınlar Günü", "international day of rural women", monthDay 10 15 )
+--   , ( 	"Tutuklu ve personeli Kayıp Dayanışma Uluslararası Günü", "international day of solidarity with detained and missing staff members", monthDay 3 25 )
+--   , ( 	"Filistin Halkıyla Uluslararası Dayanışma Günü", "international day of solidarity with the palestinian people", monthDay 11 29 )
+--   , ( 	"Kalkınma ve Barış İçin Spor Günü", "international day of sport for development and peace", monthDay 4 6 )
+--   , ( 	"Birleşmiş Milletler Barış Gücü Günü", "international day of united nations peacekeepers", monthDay 5 29 )
+--   , ( 	"Bilimde Kadın ve Kız Çocuklarının Uluslararası Günü", "international day of women and girls in science", monthDay 2 11 )
+--   , ( 	"Yoga Uluslararası Günü", "international day of yoga", monthDay 6 21 )
+--   , ( 	"Kadın sünneti için Sıfır Hoşgörü Günü", "international day of zero tolerance for female genital mutilation", monthDay 2 6 )
+--   , ( 	"Kız Çocuk Günü", "international day of the girl child", monthDay 10 11 )
+--   , ( 	"Zorla Kayıp Kurbanlarının Uluslararası Günü", "international day of the victims of enforced disappearances", monthDay 8 30 )
+--   , ( 	"Dünya Yerli Halklar Günü", "international day of the world'?s indigenous people", monthDay 8 9 )
+--   , ( 	"Gün Uluslararası Gazeteciler Karşı Suçlar cezasız kalmasını etmek", "international day to end impunity for crimes against journalists", monthDay 11 2 )
+--   , ( 	"Son Obstetrik Fistüllerde Uluslararası Günü", "international day to end obstetric fistula", monthDay 5 23 )
+--   , ( 	"Uluslararası Doğal Afetleri Azaltma Günü", "iddr|international day for (natural )?disaster reduction", monthDay 10 13 )
+--   , ( 	"Uluslararası İnsan Dayanışma Günü", "international human solidarity day", monthDay 12 20 )
+--   , ( 	"Uluslararası Caz Günü", "international jazz day", monthDay 4 30 )
+--   , ( 	"Uluslararası Okuryazarlık Günü", "international literacy day", monthDay 9 8 )
+--   , ( 	"Uluslararası Erkekler Günü", "international men'?s day", monthDay 11 19 )
+--   , ( 	"Uluslararası Göçmenler Günü", "international migrants day", monthDay 12 18 )
+--   , ( 	"Uluslararası Anadil Günü", "international mother language day", monthDay 2 21 )
+--   , ( 	"Uluslararası Dağ Günü", "international mountain day", monthDay 12 11 )
+--   , ( 	"Uluslararası Hemşireler Günü", "international nurses day", monthDay 5 12 )
+--   , ( 	"Uluslararası Overdose Farkındalık Günü", "international overdose awareness day", monthDay 8 31 )
+--   , ( 	"Ekonomik ve Sosyal Kalkınma Dünya Gönüllüler Günü", "international volunteer day for economic and social development", monthDay 12 5 )
+--   , ( 	"Uluslararası Widows' Günü", "international widows'? day", monthDay 6 23 )
+--   , ( 	"Uluslararası Kadınlar Günü", "international women'?s day", monthDay 3 8 )
+--   , ( 	"Uluslararası Gençlik Günü", "international youth day", monthDay 8 12 )
+--   , ( 	"Mayıs günü", "may day", monthDay 5 1 )
+--   , ( 	"Nelson Mandela Günü", "nelson mandela day", monthDay 7 18 )
+--   , ( 	"Yılbaşı", "new year'?s?( day)?", monthDay  1  1 )
+--   , ( 	"Yeni Yıl arifesi", "new year'?s? eve", monthDay 12 31 )
+--   , ( 	"Ortodoks Noel Günü", "orthodox christmas day", monthDay 1 7 )
+--   , ( 	"Ortodoks Yeni Yılı", "orthodox new year", monthDay 1 14 )
+--   , ( 	"Kamu Hizmeti Günü", "public service day", monthDay 6 23 )
+--   , ( 	"Aziz George Günü", "(saint|st\\.?) george'?s day|feast of saint george", monthDay 4 23 )
+--   , ( 	"Aziz Patrick Günü", "st\\.? patrick'?s day", monthDay 3 17 )
+--   , ( 	"Aziz Stephen Günü", "st\\.? stephen'?s day", monthDay 12 26 )
+--   , ( 	"İkinci Dünya Savaşı sırasında Yaşamlarını Kaybedenlerin Anma ve Uzlaşma Zamanı", "time of remembrance and reconciliation for those who lost their lives during the second world war", monthDay 5 8 )
+--   , ( 	"Birleşmiş Milletler Günü", "united nations day", monthDay 10 24 )
+--   , ( 	"Birleşmiş Milletler Mayın Farkındalık Günü", "united nations'? mine awareness day", monthDay 4 4 )
+--   , ( 	"Birleşmiş Milletler Dünya Sağlık Günü", "united nations'? world health day", monthDay 4 7 )
+--   , ( 	"Evrensel Çocuk Günü", "universal children'?s day", monthDay 11 20 )
+--   , ( 	"Sevgililer Günü", "valentine'?s?( day)?", monthDay 2 14 )
+--   , ( 	"Dünya AIDS Günü", "world aids day", monthDay 12 1 )
+--   , ( 	"Dünya Otizm Farkındalık Günü", "world autism awareness day", monthDay 4 2 )
+--   , ( 	"Dünya Otoimmün Artrit Günü", "world autoimmune arthritis day", monthDay 5 20 )
+--   , ( 	"Dünya Kan Bağışçısı Günü", "world blood donor day", monthDay 6 14 )
+--   , ( 	"Dünya Kitap ve Telif Hakları Günü", "world book and copyright day", monthDay 4 23 )
+--   , ( 	"Dünya Braille Günü", "world braille day", monthDay 1 4 )
+--   , ( 	"Dünya Kanser Günü", "world cancer day", monthDay 2 4 )
+--   , ( 	"Dünya Kentleri Günü", "world cities day", monthDay 10 31 )
+--   , ( 	"Dünya CP Günü", "world (cerebral palsy| cp) day", monthDay 10 6 )
+--   , ( 	"Dünya Günü Çocuk İşçiliğine Karşı", "world day against child labour", monthDay 6 12 )
+--   , ( 	"İnsan Ticaretine Karşı Dünya Günü", "world day against trafficking in persons", monthDay 7 30 )
+--   , ( 	"Görsel-İşitsel Miras Dünya Günü", "world day for audiovisual heritage", monthDay 10 27 )
+--   , ( 	"Diyalog ve Kalkınma Kültürel Çeşitlilik Dünya Günü", "world day for cultural diversity for dialogue and development", monthDay 5 21 )
+--   , ( 	"İş Güvenliği ve Sağlığı Dünya Günü", "world day for safety and health at work", monthDay 4 28 )
+--   , ( 	"Kölelik Kaldırılması için Dünya Günü", "world day for the abolition of slavery", monthDay 12 2 )
+--   , ( 	"Sosyal Adalet Dünya Günü", "world day of social justice", monthDay 2 20 )
+--   , ( 	"Hasta Dünya Günü", "world day of the sick", monthDay 2 11 )
+--   , ( 	"Dünya Günü Çölleşmeyle ve Kuraklıkla Mücadele", "world day to combat desertification and drought", monthDay 6 17 )
+--   , ( 	"Dünya Kalkınma Bilgilendirme Günü", "world development information day", monthDay 10 24 )
+--   , ( 	"Dünya Diyabet Günü", "world diabetes day", monthDay 11 14 )
+--   , ( 	"Dünya Down Sendromu Günü", "world down syndrome day", monthDay 3 21 )
+--   , ( 	"Dünya Yaşlı İstismarı Farkındalık Günü", "world elder abuse awareness day", monthDay 6 15 )
+--   , ( 	"Dünya Çevre Günü", "world environment day", monthDay 6 5 )
+--   , ( 	"Dünya Gıda Günü", "world food day", monthDay 10 16 )
+--   , ( 	"Dünya Soykırımını Anma Günü", "world genocide commemoration day", monthDay 12 9 )
+--   , ( 	"Dünya Kalp Günü", "world heart day", monthDay 9 29 )
+--   , ( 	"Dünya Hepatit Günü", "world hepatitis day", monthDay 7 28 )
+--   , ( 	"Dünya İnsani Yardım Günü", "world humanitarian day", monthDay 8 19 )
+--   , ( 	"Dünya Bilgi Toplumu Günü", "world information society day", monthDay 5 17 )
+--   , ( 	"Dünya Fikri Mülkiyet Günü", "world intellectual property day", monthDay 4 26 )
+--   , ( 	"Dünya Sıtma Günü", "world malaria day", monthDay 4 25 )
+--   , ( 	"Dünya Ruh Sağlığı Günü", "world mental health day", monthDay 10 10 )
+--   , ( 	"Dünya Meteoroloji Günü", "world meteorological day", monthDay 3 23 )
+--   , ( 	"Dünya Tütüne Hayır Günü", "world no tobacco day", monthDay 5 31 )
+--   , ( 	"Dünya Okyanus Günü", "world oceans day", monthDay 6 8 )
+--   , ( 	"Dünya Yumurtalık Kanseri Günü", "world ovarian cancer day", monthDay 5 8 )
+--   , ( 	"Dünya Zatürre Günü", "world pneumonia day", monthDay 11 12 )
+--   , ( 	"Dünya Şiir Günü", "world poetry day", monthDay 3 21 )
+--   , ( 	"Dünya Nüfus Günü", "world population day", monthDay 7 11 )
+--   , ( 	"Dünya Posta Günü", "world post day", monthDay 10 9 )
+--   , ( 	"Dünya Prematüre Günü", "world prematurity day", monthDay 11 17 )
+--   , ( 	"Dünya Basın Özgürlüğü Günü", "world press freedom day", monthDay 5 3 )
+--   , ( 	"Dünya Kuduz Günü", "world rabies day", monthDay 9 28 )
+--   , ( 	"Dünya Radyo Günü", "world radio day", monthDay 2 13 )
+--   , ( 	"Dünya Mülteciler Günü", "world refugee day", monthDay 6 20 )
+--   , ( 	"Barış ve Kalkınma Dünya Bilim Günü", "world science day for peace and development", monthDay 11 10 )
+--   , ( 	"Dünya Cinsel Sağlık Günü", "world sexual health day", monthDay 9 4 )
+--   , ( 	"Dünya Toprak Günü", "world soil day", monthDay 12 5 )
+--   , ( 	"Dünya İnme Günü", "world stroke day", monthDay 10 29 )
+--   , ( 	"Dünya İntiharı Önleme Günü", "world suicide prevention day", monthDay 9 10 )
+--   , ( 	"Dünya Öğretmenler Günü", "world teachers'? day", monthDay 10 5 )
+--   , ( 	"Dünya Televizyon Günü", "world television day", monthDay 11 21 )
+--   , ( 	"Dünya Tuvalet Günü", "world toilet day", monthDay 11 19 )
+--   , ( 	"Dünya Turizm Günü", "world tourism day", monthDay 9 27 )
+--   , ( 	"Dünya Tüberküloz Günü", "world tuberculosis day", monthDay 3 24 )
+--   , ( 	"Dünya Tuna Günü", "world tuna day", monthDay 5 2 )
+--   , ( 	"Dünya Vegan Günü", "world vegan day", monthDay 11 1 )
+--   , ( 	"Dünya Vejetaryen Günü", "world vegetarian day", monthDay 10 1 )
+--   , ( 	"Dünya Su Günü", "world water day", monthDay 3 22 )
+--   , ( 	"Dünya Sulak Alanlar Günü", "world wetlands day", monthDay 2 2 )
+--   , ( 	"World Wildlife Günü", "world wildlife day", monthDay 3 3 )
+--   , ( 	"Dünya Gençlik Becerileri Günü", "world youth skills day", monthDay 7 15 )
+--   , ( 	"Sıfır Ayrımcılık Günü", "zero discrimination day", monthDay 3 1 )
+
+--   -- Fixed day/week/month, year over year
+--   , ( 	"Toplum günü", "commonwealth day", nthDOWOfMonth 2 1 3 )
+--   , ( 	"Yol Trafik Mağdurları Anma Günü"
+--     , 	"(Dünya)? Karayolu trafik kurbanlarını anma günü"
+--     , nthDOWOfMonth 3 7 11 )
+--   , ( 	"Uluslararası Kooperatifler Günü"
+--     , 	"Eş uluslararası gün \\ -? Operatives", nthDOWOfMonth 1 6 7 )
+--   , ( 	"Martin Luther King'in Günü"
+--     , 	"(MLK | Martin Luther King,?) (Jr \\ |.? Genç) günlük |? (Sivil | Idaho insan) hakları günü"
+--     , nthDOWOfMonth 3 1 1
+--     )
+
+--   -- The day after Thanksgiving (not always the fourth Friday of November)
+--   , ( 	"Kara Cuma", "black frid?day"
+--     , cycleNthAfter False TG.Day 1 $ nthDOWOfMonth 4 4 11
+--     )
+--   , ( 	"Dünya Habitat Günü", "world habitat day", nthDOWOfMonth 1 1 10 )
+--   , ( 	"Dünya Böbrek Günü", "world kidney day", nthDOWOfMonth 2 4 3 )
+--   , ( 	"Dünya Cüzzam Günü", "world leprosy day"
+--     , predLastOf (dayOfWeek 7) (month 1) )
+--   , ( 	"Dünya Denizcilik Günü", "world maritime day"
+--     , predLastOf (dayOfWeek 4) (month 9) )
+--   , ( 	"Dünya Göçmen Kuşlar Günü", "world migratory bird day"
+--     , nthDOWOfMonth 2 6 5 )
+--   , ( 	"Dünya Felsefe Günü", "world philosophy day", nthDOWOfMonth 3 4 11 )
+--   , ( 	"Dünya Din Günü", "world religion day", nthDOWOfMonth 3 7 1 )
+--   , ( 	"Dünya Görme Günü", "world sight day", nthDOWOfMonth 2 4 10 )
+
+--   -- Other
+--   , ( 	"Patronun Günü", "boss'?s?( day)?"
+--     , predNthClosest 0 weekday (monthDay 10 16) )
+--   ]
+
+-- ruleComputedHolidays :: [Rule]
+-- ruleComputedHolidays = mkRuleHolidays
+--   [ ( 	"Yükseliş Günü", "ascension\\s+(thurs)?day"
+--     , cycleNthAfter False TG.Day 39 easterSunday )
+--   , ( 	"Paskalya öncesi perhizin ilk Çarşambası", "ash\\s+wednesday|carnival"
+--     , cycleNthAfter False TG.Day (-46) easterSunday )
+--   , ( 	"Ashura", "(day of )?ashura"
+--     , cycleNthAfter False TG.Day 9 muharram )
+--   , ( 	"Bhai Dooj", "bhai(ya)?\\s+d(u|oo)j|bhau\\-beej|bhai\\s+(tika|phonta)"
+--     , cycleNthAfter False TG.Day 4 dhanteras )
+--   -- 6th day after Diwali
+--   , ( 	"Chhath", "chhathi?|chhath (parv|puja)|dala (chhath|puja)|surya shashthi"
+--     , cycleNthAfter False TG.Day 8 dhanteras )
+--   , ( 	"Boghi", "boghi|bogi\\s+pandigai"
+--     , cycleNthAfter False TG.Day (-1) thaiPongal )
+--   , ( 	"Çin yeni Yılı", "chinese\\s+(lunar\\s+)?new\\s+year('s\\s+day)?"
+--     , chineseNewYear )
+--   , ( 	"Temiz Pazartesi"
+--     , 	"(Ortodoks \\ s +) (kül | temiz | yeşil | saf | shrove)? \\ s + Pazartesi | ödünç arasında Pazartesi"
+--     , cycleNthAfter False TG.Day (-48) orthodoxEaster )
+--   , ( 	"Corpus Christi", "(the feast of )?corpus\\s+christi"
+--     , cycleNthAfter False TG.Day 60 easterSunday )
+--   , ( 	"Dhanteras", "dhanatrayodashi|dhanteras|dhanvantari\\s+trayodashi"
+--     , dhanteras )
+--   , ( 	"Diwali", "deepavali|diwali|lakshmi\\s+puja"
+--     , cycleNthAfter False TG.Day 2 dhanteras )
+--   , ( 	"Durga Ashtami", "(durga|maha)(\\s+a)?shtami"
+--     , cycleNthAfter False TG.Day 7 navaratri )
+--   , ( 	"Paskalya Pazartesi", "easter\\s+mon(day)?"
+--     , cycleNthAfter False TG.Day 1 easterSunday )
+--   , ( 	"Paskalya Pazar", "easter(\\s+sun(day)?)?", easterSunday )
+--   , ( 	"Kurban Bayramı", "bakr[\\-\\s]e?id|e?id [au]l\\-adha|sacrifice feast"
+--     , eidalAdha )
+--   , ( 	"Eid al-fitr", "eid al\\-fitr", eidalFitr )
+--   , ( 	"Govardhan Puja", "govardhan\\s+puja|annak(u|oo)t"
+--     , cycleNthAfter False TG.Day 3 dhanteras )
+--   , ( 	"Hayırlı cumalar", "(good|great|holy)\\s+fri(day)?"
+--     , cycleNthAfter False TG.Day (-2) easterSunday )
+--   , ( 	"Kutsal", "(rangwali )?holi|dhuleti|dhulandi|phagwah"
+--     , cycleNthAfter False TG.Day 39 vasantPanchami )
+--   , ( 	"Holika Dahan", "holika dahan|kamudu pyre|chhoti holi"
+--     , cycleNthAfter False TG.Day 38 vasantPanchami )
+--   , ( 	"Kutsal Cumartesi"
+--     , 	"(Siyah |) kutsal (ve büyük |? Neşeli) (urday) sat? | Büyük Şabat | paskalya arifesinde"
+--     , cycleNthAfter False TG.Day (-1) easterSunday )
+--   , ( 	"İslami Yeni Yıl", "(arabic|hijri|islamic) new year|amun jadid|muharram"
+--     , muharram )
+--   , ( 	"Isra ve Miraç"
+--     , 	"Isra ve Miraç (|) peygamber yükselme? 'In?'? | Cennete () yükselme |? Gece yolculuk"
+--     , cycleNthAfter False TG.Day 26 rajab
+--     )
+--   , ( 	"Jumu'atul-Wida", "jumu'atul\\-widaa?'?|jamat[\\-\\s]ul[\\-\\s]vida"
+--     , predNthAfter (-1) (dayOfWeek 5) eidalFitr )
+--   , ( 	"Kaanum Pongal", "(kaanum|kanni)\\s+pongal"
+--     , cycleNthAfter False TG.Day 2 thaiPongal )
+--   , ( 	"BaOmer Lag", "lag b[a']omer", lagBaOmer )
+--   , ( 	"Miraç Gecesi"
+--     , 	"- | (değer | önlemler | | gücün kader) gece [qk] adr arkadaşları [\\ s \\] Laylat"
+--     , cycleNthAfter False TG.Day 26 ramadan )
+--   , ( 	"Lazarus Cumartesi", "lazarus\\s+saturday"
+--     , cycleNthAfter False TG.Day (-8) orthodoxEaster )
+--   , ( 	"Maha Navami", "maha\\s+navami", cycleNthAfter False TG.Day 8 navaratri )
+--   , ( 	"Maha Saptami", "maha\\s+saptami", cycleNthAfter False TG.Day 6 navaratri )
+--   , ( 	"Mattu Pongal", "maa?ttu\\s+pongal"
+--     , cycleNthAfter False TG.Day 1 thaiPongal )
+--   , ( 	"Paskalya Öncesi Perşembe"
+--     , 	"(Antlaşma | (büyük ve) kutsal |? Maundy | sırf) \\ s + Per (rsday) |? Per (rsday) gizemlerinden"
+--     , cycleNthAfter False TG.Day (-3) easterSunday )
+--   , ( 	"Mevlid"
+--     , 	"Mevlid (\\ s + arkadaşları \\ - nab (AWI | i s + al \\ \\ - Şerif)) |?? Mevli [dt] | mulud | doğum (gün) () peygamber (Muhammed) ? |? () peygamber doğum günü"
+--     , mawlid )
+--   , ( 	"Naraka Chaturdashi"
+--     , 	"Naraka (nivaran) chaturdashi |? (Kali | Roop) chaudas | choti diwali"
+--     , cycleNthAfter False TG.Day 1 dhanteras )
+--   , ( 	"Ortodoks Paskalya Bayramı", "orthodox\\s+easter\\s+mon(day)?"
+--     , cycleNthAfter False TG.Day 1 orthodoxEaster )
+--   , ( 	"Ortodoks Paskalya Pazarı", "orthodox\\s+easter(\\s+sun(day)?)?|pascha?"
+--     , orthodoxEaster )
+--   , ( 	"Ortodoks Kutsal Cumartesi", "orthodox\\s+holy\\s+sat(urday)?|the great sabbath"
+--     , cycleNthAfter False TG.Day (-1) orthodoxEaster )
+--   , ( 	"Ortodoks Büyük Cuma", "orthodox\\s+great(\\s+and\\s+holy)?\\s+friday"
+--     , cycleNthAfter False TG.Day (-2) orthodoxEaster )
+--   , ( 	"Ortodoks Palmiye Pazar", "orthodox\\s+(branch|palm|yew)\\s+sunday"
+--     , cycleNthAfter False TG.Day (-7) orthodoxEaster )
+--   , ( 	"Palmiye Pazar", "(branch|palm|yew)\\s+sunday"
+--     , cycleNthAfter False TG.Day (-7) easterSunday )
+--   , ( 	"Hamsin", "pentecost|white sunday|whitsunday"
+--     , cycleNthAfter False TG.Day 49 easterSunday )
+--   , ( 	"Raksha Bandhan", "raksha(\\s+)?bandhan|rakhi", rakshaBandhan )
+--   , ( 	"Shemini Atzeret", "shemini\\s+atzeret"
+--     , cycleNthAfter False TG.Day 21 roshHashana )
+--   , ( 	"Cadılar", "pancake (tues)?day|shrove tuesday"
+--     , cycleNthAfter False TG.Day (-47) easterSunday )
+--   , ( 	"Simchat Tevrat", "simc?hat\\s+torah"
+--     , cycleNthAfter False TG.Day 22 roshHashana )
+--   , ( 	"Tay Pongal"
+--     , 	"(Thai) Pongal |? Pongal pandigai | (makara |? Magha) sankranth i? |? Maghi"
+--     , thaiPongal )
+--   , ( 	"Thiru Onam", "(thiru(v|\\s+))?onam", thiruOnam )
+--   , ( 	"Tişa B'Av", "tisha b'av", tishaBAv )
+--   , ( 	"Trinity Pazar", "trinity\\s+sunday"
+--     , cycleNthAfter False TG.Day 56 easterSunday )
+--   , ( 	"Vasant Panchami", "[bv]asant\\s+panchami", vasantPanchami )
+--   , ( 	"Vijayadashami", "dasara|duss(eh|he)ra|vijayadashami"
+--     , cycleNthAfter False TG.Day 9 navaratri )
+--   -- 15th day of Shevat
+--   , ( 	"Tu BiShvat", "tu b[i']shvat", tuBishvat )
+--   -- day of the full moon in May in the Gregorian calendar
+--   , ( 	"Vesak", "v(e|ai)sak(ha)?|buddha (day|purnima)", vesak )
+--   , ( 	"Yom Ha'atzmaut", "yom ha'?atzmaut", yomHaatzmaut )
+--   , ( 	"Yom HaShoah"
+--     , 	"Yom HaShoah | yom HaZikaron lashoah ve-lag'vurah |? Holokost (hatıra) günlük"
+--     , cycleNthAfter False TG.Day 12 passover )
+--   , ( 	"Yom Kippur", "yom\\s+kippur", cycleNthAfter False TG.Day 9 roshHashana )
+--   , ( 	"Whit Pazartesi", "(pentecost|whit)\\s+monday|monday of the holy spirit"
+--     , cycleNthAfter False TG.Day 50 easterSunday )
+--   ]
+
+-- ruleComputedHolidays' :: [Rule]
+-- ruleComputedHolidays' = mkRuleHolidays'
+--   [ ( 	"Küresel Gençlik Hizmeti Günü", "global youth service day|gysd"
+--     , let start = globalYouthServiceDay
+--           end = cycleNthAfter False TG.Day 2 globalYouthServiceDay
+--         in interval TTime.Open start end )
+--   , ( 	"Büyük Perhiz", "great\\s+(fast|lent)"
+--     , let start = cycleNthAfter False TG.Day (-48) orthodoxEaster
+--           end = cycleNthAfter False TG.Day (-9) orthodoxEaster
+--         in interval TTime.Open start end )
+--   , ( 	"Hanuka", "c?hann?ukk?ah"
+--     , let start = chanukah
+--           end = cycleNthAfter False TG.Day 7 chanukah
+--         in interval TTime.Open start end )
+--   , ( 	"Lent", "lent"
+--     , let start = cycleNthAfter False TG.Day (-46) easterSunday
+--           end = cycleNthAfter False TG.Day (-1) easterSunday
+--         in interval TTime.Open start end )
+--   , ( 	"Navaratri", "durga\\s+puja|durgotsava|nava?rath?ri"
+--     , let start = navaratri
+--           end = cycleNthAfter False TG.Day 9 navaratri
+--         in interval TTime.Open start end )
+--   , ( 	"Fısıh", "passover|pesa[ck]?h"
+--     , let start = passover
+--           end = cycleNthAfter False TG.Day 8 passover
+--         in interval TTime.Open start end )
+--   , ( 	"Ramazan", "rama[dt]h?an|ramzaa?n"
+--     , let start = ramadan
+--           end = cycleNthAfter False TG.Day (-1) eidalFitr
+--         in interval TTime.Open start end )
+--   , ( 	"Roş Aşana", "rosh hashann?ah?|yom teruah"
+--     , let start = roshHashana
+--           end = cycleNthAfter False TG.Day 2 roshHashana
+--         in interval TTime.Open start end )
+--   , ( 	"Şavuot", "feast of weeks|shavu'?oth?|shovuos"
+--     , let start = cycleNthAfter False TG.Day 50 passover
+--           end = cycleNthAfter False TG.Day 52 passover
+--         in interval TTime.Open start end )
+--   , ( 	"Sukot", "feast of (booths|tabernacles|the ingathering)|su[ck]{2}o[st]"
+--     , let start = cycleNthAfter False TG.Day 14 roshHashana
+--           end = cycleNthAfter False TG.Day 22 roshHashana
+--         in interval TTime.Open start end )
+
+--   -- Other
+--   -- Last Saturday of March unless it falls on Holy Saturday
+--   -- In which case it's the Saturday before
+--   , ( 	"Dünya Saati", "earth hour"
+--     , let holySaturday = cycleNthAfter False TG.Day (-1) easterSunday
+--           tentative = predLastOf (dayOfWeek 6) (month 3)
+--           alternative = cycleNthAfter False TG.Day (-7) tentative
+--         in do
+--           day <- intersectWithReplacement holySaturday tentative alternative
+--           start <- intersect day $ hourMinute True 20 30
+--           interval TTime.Closed start $ cycleNthAfter False TG.Minute 60 start )
+--   ]
+
+-- ruleCycleThisLastNext :: Rule
+-- ruleCycleThisLastNext = Rule
+--   { name = "this|last|next <cycle>"
+--   , pattern =
+--     [ regex 	"(Bu | akım | geliyor | sonraki | aşağıdaki | son | geçmiş | önceki)"
+--     , dimension TimeGrain
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):Token TimeGrain grain:_) ->
+--         case Text.toLower match of
+--           	"bu"          -> tt $ cycleNth grain 0
+--           	"Önümüzdeki"        -> tt $ cycleNth grain 0
+--           	"Geçerli"       -> tt $ cycleNth grain 0
+--           	"son"          -> tt . cycleNth grain $ - 1
+--           	"Geçtiğimiz"          -> tt . cycleNth grain $ - 1
+--           	"önceki"      -> tt . cycleNth grain $ - 1
+--           	"Sonraki"          -> tt $ cycleNth grain 1
+--           	"aşağıdaki" -> tt $ cycleNth grain 1
+--           _ -> Nothing
+--       _ -> Nothing
+--   }
+
+-- ruleDOMOfTimeMonth :: Rule
+-- ruleDOMOfTimeMonth = Rule
+--   { name = "<day-of-month> (ordinal or number) of <month>"
+--   , pattern =
+--     [ Predicate isDOMValue
+--     , regex 	"Nin ()?"
+--     , Predicate $ isGrainOfTime TG.Month
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token Time td:_) -> Token Time <$> intersectDOM td token
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheAfterBeforeTime :: Rule
+-- ruleCycleTheAfterBeforeTime = Rule
+--   { name = "the <cycle> after|before <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension TimeGrain
+--     , regex 	"(Sonra | öncesi)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (  _
+--        : Token TimeGrain grain
+--        : Token RegexMatch (GroupMatch (match:_))
+--        : Token Time td
+--        : _) ->
+--         let n = if Text.toLower match == 	"sonra" then 1 else - 1 in
+--           tt $ cycleNthAfter False grain n td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleAfterBeforeTime :: Rule
+-- ruleCycleAfterBeforeTime = Rule
+--   { name = "<cycle> after|before <time>"
+--   , pattern =
+--     [ dimension TimeGrain
+--     , regex 	"(Sonra | öncesi)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token TimeGrain grain:
+--        Token RegexMatch (GroupMatch (match:_)):
+--        Token Time td:
+--        _) ->
+--         let n = if Text.toLower match == 	"sonra" then 1 else - 1 in
+--           tt $ cycleNthAfter False grain n td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleOrdinalOfTime :: Rule
+-- ruleCycleOrdinalOfTime = Rule
+--   { name = "<ordinal> <cycle> of <time>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , dimension TimeGrain
+--     , regex 	"Nin | in | den"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt $ cycleNthAfter True grain (n - 1) td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleLastOrdinalOfTime :: Rule
+-- ruleCycleLastOrdinalOfTime = Rule
+--   { name = "<ordinal> last <cycle> of <time>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , regex 	"son"
+--     , dimension TimeGrain
+--     , regex 	"Nin | in | den"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt . cycleNthAfter True grain (-n) . cycleNthAfter True (timeGrain td) 1 $ td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheOrdinalOfTime :: Rule
+-- ruleCycleTheOrdinalOfTime = Rule
+--   { name = "the <ordinal> <cycle> of <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , dimension TimeGrain
+--     , regex 	"Nin | in | den"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt $ cycleNthAfter True grain (n - 1) td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheLastOrdinalOfTime :: Rule
+-- ruleCycleTheLastOrdinalOfTime = Rule
+--   { name = "the <ordinal> last <cycle> of <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , regex 	"son"
+--     , dimension TimeGrain
+--     , regex 	"Nin | in | den"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:_:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt . cycleNthAfter True grain (-n) . cycleNthAfter True (timeGrain td) 1 $ td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheOfTime :: Rule
+-- ruleCycleTheOfTime = Rule
+--   { name = "the <cycle> of <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension TimeGrain
+--     , regex 	"Nin"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token TimeGrain grain:_:Token Time td:_) ->
+--         tt $ cycleNthAfter True grain 0 td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleOrdinalAfterTime :: Rule
+-- ruleCycleOrdinalAfterTime = Rule
+--   { name = "<ordinal> <cycle> after <time>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , dimension TimeGrain
+--     , regex 	"sonra"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt $ cycleNthAfter True grain (n - 1) td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheOrdinalAfterTime :: Rule
+-- ruleCycleTheOrdinalAfterTime = Rule
+--   { name = "<ordinal> <cycle> after <time>"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , dimension TimeGrain
+--     , regex 	"sonra"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:Token TimeGrain grain:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt $ cycleNthAfter True grain (n - 1) td
+--       _ -> Nothing
+--   }
+
+-- ruleCycleOrdinalQuarter :: Rule
+-- ruleCycleOrdinalQuarter = Rule
+--   { name = "<ordinal> quarter"
+--   , pattern =
+--     [ dimension Ordinal
+--     , Predicate $ isGrain TG.Quarter
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_) -> do
+--         n <- getIntValue token
+--         tt . cycleNthAfter True TG.Quarter (n - 1) $
+--           cycleNth TG.Year 0
+--       _ -> Nothing
+--   }
+
+-- ruleCycleTheOrdinalQuarter :: Rule
+-- ruleCycleTheOrdinalQuarter = Rule
+--   { name = "the <ordinal> quarter"
+--   , pattern =
+--     [ regex 	""
+--     , dimension Ordinal
+--     , Predicate $ isGrain TG.Quarter
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:token:_) -> do
+--         n <- getIntValue token
+--         tt . cycleNthAfter True TG.Quarter (n - 1) $
+--           cycleNth TG.Year 0
+--       _ -> Nothing
+--   }
+
+-- ruleCycleOrdinalQuarterYear :: Rule
+-- ruleCycleOrdinalQuarterYear = Rule
+--   { name = "<ordinal> quarter <year>"
+--   , pattern =
+--     [ dimension Ordinal
+--     , Predicate $ isGrain TG.Quarter
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (token:_:Token Time td:_) -> do
+--         n <- getIntValue token
+--         tt $ cycleNthAfter False TG.Quarter (n - 1) td
+--       _ -> Nothing
+--   }
+
+-- ruleDurationInWithinAfter :: Rule
+-- ruleDurationInWithinAfter = Rule
+--   { name = "in|within|after <duration>"
+--   , pattern =
+--     [ regex 	"(Sonra | | dahilinde olarak)"
+--     , dimension Duration
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):
+--        Token Duration dd:
+--        _) -> case Text.toLower match of
+--          	"Dahilinde" -> Token Time <$>
+--            interval TTime.Open (cycleNth TG.Second 0) (inDuration dd)
+--          	"sonra"  -> tt . withDirection TTime.After $ inDuration dd
+--          	"içinde"     -> tt $ inDuration dd
+--          _        -> Nothing
+--       _ -> Nothing
+--   }
+
+-- ruleDurationLastNext :: Rule
+-- ruleDurationLastNext = Rule
+--   { name = "last|past|next <duration>"
+--   , pattern =
+--     [ regex 	"([Lp] ast | sonraki)"
+--     , dimension Duration
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token RegexMatch (GroupMatch (match:_)):
+--        Token Duration DurationData{TDuration.grain, TDuration.value}:
+--        _) -> case Text.toLower match of
+--          	"Sonraki" -> tt $ cycleN True grain value
+--          	"son" -> tt $ cycleN True grain (- value)
+--          	"Geçtiğimiz" -> tt $ cycleN True grain (- value)
+--          _      -> Nothing
+--       _ -> Nothing
+--   }
+
+-- ruleNDOWago :: Rule
+-- ruleNDOWago = Rule
+--   { name = "<integer> <named-day> ago|back"
+--   , pattern =
+--     [ Predicate isNatural
+--     , Predicate isADayOfWeek
+--     , regex 	"Önce | geri"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Numeral NumeralData{TNumeral.value = v}:Token Time td:_) ->
+--         tt $ predNth (- (floor v)) False td
+--       _ -> Nothing
+--   }
+
+-- ruleDurationHenceAgo :: Rule
+-- ruleDurationHenceAgo = Rule
+--   { name = "<duration> hence|ago"
+--   , pattern =
+--     [ dimension Duration
+--     , regex 	"(Dolayısıyla | önce)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Duration dd:
+--        Token RegexMatch (GroupMatch (match:_)):
+--        _) -> case Text.toLower match of
+--         	"önce" -> tt $ durationAgo dd
+--         _     -> tt $ inDuration dd
+--       _ -> Nothing
+--   }
+
+-- ruleDayDurationHenceAgo :: Rule
+-- ruleDayDurationHenceAgo = Rule
+--   { name = "<day> <duration> hence|ago"
+--   , pattern =
+--     [ Predicate $ or . sequence [isGrainOfTime TG.Day, isGrainOfTime TG.Month]
+--     , dimension Duration
+--     , regex 	"(Bundan | önce | dolayısıyla)"
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:
+--        Token Duration dd:
+--        Token RegexMatch (GroupMatch (match:_)):
+--        _) -> case Text.toLower match of
+--          	"önce" -> Token Time <$> intersect td (durationIntervalAgo dd)
+--          _     -> Token Time <$> intersect td (inDurationInterval dd)
+--       _ -> Nothing
+--   }
+
+-- ruleDayInDuration :: Rule
+-- ruleDayInDuration = Rule
+--   { name = "<day> in <duration>"
+--   , pattern =
+--     [ Predicate $ or . sequence [isGrainOfTime TG.Day, isGrainOfTime TG.Month]
+--     , regex 	"içinde"
+--     , dimension Duration
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:_:Token Duration dd:_) ->
+--         Token Time <$> intersect td (inDurationInterval dd)
+--       _ -> Nothing
+--   }
+
+-- ruleInNumeral :: Rule
+-- ruleInNumeral = Rule
+--   { name = "in <number> (implicit minutes)"
+--   , pattern =
+--     [ regex 	"içinde"
+--     , Predicate $ isIntegerBetween 0 60
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Numeral NumeralData{TNumeral.value = v}:_) ->
+--         tt . inDuration . duration TG.Minute $ floor v
+--       _ -> Nothing
+--   }
+
+-- ruleDurationAfterBeforeTime :: Rule
+-- ruleDurationAfterBeforeTime = Rule
+--   { name = "<duration> after|before|from <time>"
+--   , pattern =
+--     [ dimension Duration
+--     , regex 	"(Sonra | önce | itibaren)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Duration dd:
+--        Token RegexMatch (GroupMatch (match:_)):
+--        Token Time td:
+--        _) -> case Text.toLower match of
+--          	"önce" -> tt $ durationBefore dd td
+--          _        -> tt $ durationAfter dd td
+--       _ -> Nothing
+--   }
+
+-- ruleIntervalForDurationFrom :: Rule
+-- ruleIntervalForDurationFrom = Rule
+--   { name = "for <duration> from <time>"
+--   , pattern =
+--     [ regex 	"için"
+--     , dimension Duration
+--     , regex 	"(Den | başlayarak | başlayan | sonra | başlayarak)"
+--     , dimension Time
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Duration dd:_:Token Time td1:_) ->
+--         Token Time <$> interval TTime.Open td1 (durationAfter dd td1)
+--       _ -> Nothing
+-- }
+
+-- ruleIntervalTimeForDuration :: Rule
+-- ruleIntervalTimeForDuration = Rule
+--   { name = "<time> for <duration>"
+--   , pattern =
+--     [ Predicate isNotLatent
+--     , regex 	"için"
+--     , dimension Duration
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td1:_:Token Duration dd:_) ->
+--         Token Time <$> interval TTime.Open td1 (durationAfter dd td1)
+--       _ -> Nothing
+-- }
+
+-- ruleIntervalFromTimeForDuration :: Rule
+-- ruleIntervalFromTimeForDuration = Rule
+--   { name = "from <time> for <duration>"
+--   , pattern =
+--     [ regex 	"(Den | başlayarak | başlayan | sonra | başlayarak)"
+--     , Predicate isNotLatent
+--     , regex 	"için"
+--     , dimension Duration
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (_:Token Time td1:_:Token Duration dd:_) ->
+--         Token Time <$> interval TTime.Open td1 (durationAfter dd td1)
+--       _ -> Nothing
+-- }
+
+-- ruleTimezone :: Rule
+-- ruleTimezone = Rule
+--   { name = "<time> timezone"
+--   , pattern =
+--     [ Predicate $ and . sequence [isNotLatent, isATimeOfDay]
+--     , regex 	"\\ b (YEKT | YEKST | YAKT | YAKST | WITA | WIT | WIB | WGT | WGST | WFT | ISLAK | BATI | WAT | idin | VUT | VLAT | Vlast | VET | UZT | UYT | UYST | UTC | ulat | TVT | TMT | TLT | TKT | TJT | TFT | Taht | SST | SRT | SGT | SCT | SBT | SAST | SAMT | RET | PYT | PYST | PWT | PST | PONT | PMST | PMDT | PKT | PHT | PHOT | PGT | PETT | pETST | PET | PDT | OMGİ | OMSST | NZST | NZDT | SOMUN | NST | NPT | NOVT | NOVST | EDK | NDT | NKT | MYT | MVT | MUT | MST | MSK | MSD | MMT | MHT | MDT | MAWT | MART | MAGT | magst | LINT | LHST | LHDT | Kuyt | KST | KRAT | Krast | KGT | JST | IST | TUİÇ | IRKT | IRKST | IRDT | IOT | IDT | BİT | Hovt | HKT | GYT | GST | GMT | yaldızlı | GFT | GET | GAMT | GALT | FNT | FKT | FKST | FJT | FJST | EST | EGT | EGST | EET | EEST | EDT | ECT | EAT | DOĞU | EASST | DAVT | ChST | CXT | CVT | CST | COT | CLT | CLST | CKT | chast | CHADT | CET | CEST | CDT | CCT | CAT | CAST | BTT | BST | BRT | BRST | BOT | BNT | AZT | AZST | AZOT | AZOST | AWST | AWDT | AST | SANAT | AQTT | ANAT | ANAST | AMT | AMST | ALMT | AKST | AKDT | AFT | AEST | AEDT | ADT | ACST | ACDT) \\ b",
+--     ]
+--   , prod = \tokens -> case tokens of
+--       (Token Time td:
+--        Token RegexMatch (GroupMatch (tz:_)):
+--        _) -> Token Time <$> inTimezone (Text.toUpper tz) td
+--       _ -> Nothing
+--   }
+
+rules :: [Rule]
+rules = [
+--     ruleIntersect
+--   , ruleIntersectOf
+--   , ruleIntersectYear
+--   , ruleAbsorbOnTime
+--   , ruleAbsorbOnADOW
+--   , ruleAbsorbInMonthYear
+--   , ruleAbsorbCommaTOD
+--   , ruleNextDOW
+--   , ruleNextTime
+--   , ruleThisTime
+--   , ruleLastTime
+--   , ruleTimeBeforeLastAfterNext
+--   , ruleLastDOWOfTime
+--   , ruleLastCycleOfTime
+--   , ruleLastNight
+--   , ruleLastWeekendOfMonth
+--   , ruleNthTimeOfTime
+--   , ruleTheNthTimeOfTime
+--   , ruleNthTimeAfterTime
+--   , ruleTheNthTimeAfterTime
+--   , ruleYearLatent
+--   , ruleYearADBC
+--   , ruleTheDOMNumeral
+--   , ruleTheDOMOrdinal
+--   , ruleDOMLatent
+--   , ruleNamedDOMOrdinal
+--   , ruleMonthDOMNumeral
+--   , ruleDOMMonth
+--   , ruleDOMOfMonth
+--   , ruleDOMOrdinalMonthYear
+--   , ruleDOMMonthYear
+--   , ruleIdesOfMonth
+--   , ruleTODLatent
+--   , ruleAtTOD
+--   , ruleTODOClock
+--   , ruleHHMM
+--   , ruleHHMMLatent
+--   , ruleHHMMSS
+--   , ruleMilitaryAMPM
+--   , ruleMilitarySpelledOutAMPM
+--   , ruleMilitarySpelledOutAMPM2
+--   , ruleTODAMPM
+--   , ruleHONumeral
+--   , ruleHODHalf
+--   , ruleHODQuarter
+--   , ruleNumeralToHOD
+--   , ruleHalfToHOD
+--   , ruleQuarterToHOD
+--   , ruleNumeralAfterHOD
+--   , ruleHalfAfterHOD
+--   , ruleQuarterAfterHOD
+--   , ruleHalfHOD
+--   , ruleYYYYQQ
+--   , ruleYYYYMMDD
+--   , ruleMMYYYY
+--   , ruleNoonMidnightEOD
+--   , rulePartOfDays
+--   , ruleEarlyMorning
+--   , rulePODIn
+--   , rulePODThis
+--   , ruleTonight
+--   , ruleAfterPartofday
+--   , ruleTimePOD
+--   , rulePODofTime
+--   , ruleWeekend
+--   , ruleTODPrecision
+--   , rulePrecisionTOD
+--   , ruleIntervalFromMonthDDDD
+--   , ruleIntervalFromDDDDMonth
+--   , ruleIntervalMonthDDDD
+--   , ruleIntervalDDDDMonth
+--   , ruleIntervalDash
+--   , ruleIntervalFrom
+--   , ruleIntervalBetween
+--   , ruleIntervalTODDash
+--   , ruleIntervalTODFrom
+--   , ruleIntervalTODAMPM
+--   , ruleIntervalTODBetween
+--   , ruleIntervalBy
+--   , ruleIntervalByTheEndOf
+--   , ruleIntervalUntilTime
+--   , ruleIntervalAfterFromSinceTime
+--   , ruleCycleTheAfterBeforeTime
+--   , ruleCycleThisLastNext
+--   , ruleDOMOfTimeMonth
+--   , ruleCycleAfterBeforeTime
+--   , ruleCycleOrdinalOfTime
+--   , ruleCycleLastOrdinalOfTime
+--   , ruleCycleTheOrdinalOfTime
+--   , ruleCycleTheLastOrdinalOfTime
+--   , ruleCycleTheOfTime
+--   , ruleCycleOrdinalAfterTime
+--   , ruleCycleTheOrdinalAfterTime
+--   , ruleCycleOrdinalQuarter
+--   , ruleCycleTheOrdinalQuarter
+--   , ruleCycleOrdinalQuarterYear
+--   , ruleDurationInWithinAfter
+--   , ruleDurationLastNext
+--   , ruleNDOWago
+--   , ruleDurationHenceAgo
+--   , ruleDayDurationHenceAgo
+--   , ruleDayInDuration
+--   , ruleDurationAfterBeforeTime
+--   , ruleIntervalForDurationFrom
+--   , ruleIntervalFromTimeForDuration
+--   , ruleIntervalTimeForDuration
+--   , ruleInNumeral
+--   , ruleTimezone
+--   , rulePartOfMonth
+--   , ruleEndOrBeginningOfMonth
+--   , ruleEndOrBeginningOfYear
+--   , ruleEndOrBeginningOfWeek
+--   , ruleNow
+--   , ruleSeason
+--   , ruleEndOfMonth
+--   , ruleBeginningOfMonth
+--   , ruleEndOfYear
+--   , ruleBeginningOfYear
+  ]
+  ++ ruleInstants
+  ++ ruleDaysOfWeek
+  ++ ruleMonths
+  ++ ruleSeasons
+--   ++ ruleComputedHolidays
+--   ++ ruleComputedHolidays'
+--   ++ rulePeriodicHolidays
