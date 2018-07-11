@@ -81,8 +81,8 @@ defaultCorpus = (testContext, testOptions, allExamples ++ custom)
 negativeCorpus :: NegativeCorpus
 negativeCorpus = (testContext, testOptions, examples)
   where
-    examples =
-      [ 	"yüksek sesle gülmek"
+    examples =[ 	
+          "yüksek sesle gülmek"
       , 	"1 yetişkin"
       , 	"Biz ayrılır"
       , 	"25"
