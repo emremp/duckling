@@ -129,20 +129,20 @@ import qualified Duckling.TimeGrain.Types as TG
 
 ruleInstants :: [Rule]
 ruleInstants = mkRuleInstants
-  [ (	"şimdi"    , TG.Second, 0  , "((just|right)\\s*)now|immediately")
-  , (	"bugün"        , TG.Day   , 0  , "todays?|(at this time)"           )
-  , (	"yarın"     , TG.Day   , 1  , "(tmrw?|tomm?or?rows?)"            )
-  , (	"dün"    , TG.Day   , - 1, "yesterdays?"                      )
+  [ ("right now"    , TG.Second, 0  , "şimdi( hemen)?|şu an(da)?")
+  , ("today"        , TG.Day   , 0  , "bugün"           )
+  , ("tomorrow"     , TG.Day   , 1  , "(yrn|yarın)"            )
+  , ("yesterday"    , TG.Day   , - 1, "dün"                      )
   ]
 
--- ruleNow :: Rule
--- ruleNow = Rule
---   { name = 	"Şimdi"
---   , pattern =
---     [ regex 	"Şimdi"
---     ]
---   , prod = \_ -> tt now
---   }
+ruleNow :: Rule
+ruleNow = Rule
+  { name = 	"now"
+  , pattern =
+    [ regex 	"Şimdi"
+    ]
+  , prod = \_ -> tt now
+  }
 
 -- ruleNextDOW :: Rule
 -- ruleNextDOW = Rule
@@ -2344,7 +2344,7 @@ rules = [
 --   , ruleEndOrBeginningOfMonth
 --   , ruleEndOrBeginningOfYear
 --   , ruleEndOrBeginningOfWeek
---   , ruleNow
+       ruleNow
 --   , ruleSeason
 --   , ruleEndOfMonth
 --   , ruleBeginningOfMonth
