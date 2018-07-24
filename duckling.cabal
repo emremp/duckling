@@ -596,7 +596,6 @@ library
                      , Duckling.Time.RO.Rules
                      , Duckling.Time.SV.Corpus
                      , Duckling.Time.SV.Rules
-                     , Duckling.Time.TR.Corpus
                      , Duckling.Time.TR.Rules
                      , Duckling.Time.VI.Corpus
                      , Duckling.Time.VI.Rules

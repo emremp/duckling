@@ -51,7 +51,6 @@ import qualified Duckling.Time.PL.Corpus as PLTime
 import qualified Duckling.Time.PT.Corpus as PTTime
 import qualified Duckling.Time.RO.Corpus as ROTime
 import qualified Duckling.Time.SV.Corpus as SVTime
-import qualified Duckling.Time.TR.Corpus as TRTime
 import qualified Duckling.Time.VI.Corpus as VITime
 import qualified Duckling.Time.ZH.Corpus as ZHTime
 import qualified Duckling.Time.ZH.CN.Corpus as ZH_CNTime
