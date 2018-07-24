@@ -165,13 +165,13 @@ ruleSeasons = mkRuleSeasons
 
 ruleDaysOfWeek :: [Rule]
 ruleDaysOfWeek = mkRuleDaysOfWeek
-  [ ( "Monday"   , "pazartesi|pzt\\.?"         )
+  [ ( "Monday"   , "pazartesi|pzt\\.?" )
   , ( "Tuesday"  , "salı|sal\\.?"      )
-  , ( "Wednesday", "çarşamba?|çar\\.?"     )
-  , ( "Thursday" , "perşembe|per\\.?" )
-  , ( "Friday"   , "cuma|cum\\.?"         )
-  , ( "Saturday" , "cumartesi|cmt\\.?"       )
-  , ( "Sunday"   , "pazar|paz\\.?"         )
+  , ( "Wednesday", "çarşamba?|çar\\.?" )
+  , ( "Thursday" , "perşembe|per\\.?"  )
+  , ( "Friday"   , "cuma|cum\\.?"      )
+  , ( "Saturday" , "cumartesi|cmt\\.?" )
+  , ( "Sunday"   , "pazar|paz\\.?"     )
   ]
 
 ruleMonths :: [Rule]
@@ -180,11 +180,11 @@ ruleMonths = mkRuleMonthsWithLatent
   , ( "February" , "şubat|şub\\.?"      , False )
   , ( "March"    , "mart|mar\\.?"       , False )
   , ( "April"    , "nisan|nis\\.?"      , False )
-  , ( "May"      , "mayıs|may\\.?"      , True  )
+  , ( "May"      , "mayıs|may\\.?"      , False )
   , ( "June"     , "haziran|haz\\.?"    , False )
   , ( "July"     , "temmuz|tem\\.?"     , False )
   , ( "August"   , "ağustos|augağu\\.?" , False )
-  , ( "September", "eylül|Eyl\\.?"      , False )
+  , ( "September", "eylül|eyl\\.?"      , False )
   , ( "October"  , "ekim|eki\\.?"       , False )
   , ( "November" , "kasım|kas\\.?"      , False )
   , ( "December" , "aralık|ara\\.?"     , False )
@@ -193,8 +193,7 @@ ruleMonths = mkRuleMonthsWithLatent
 rules :: [Rule]
 rules =
   [ 
-    ruleInstants
-    , ruleNow
+    ruleNow
     , ruleHHMM
     , ruleHHMMSS
     , ruleMMYYYY
@@ -202,7 +201,8 @@ rules =
     , rulePartOfDays
     , ruleWeekend
     , ruleSeason
-    , ruleSeasons
-    , ruleDaysOfWeek
-    , ruleMonths
   ]
+  ++ ruleInstants
+  ++ ruleDaysOfWeek
+  ++ ruleMonths
+  ++ ruleSeasons
