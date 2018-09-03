@@ -97,7 +97,7 @@ ruleDDMMYYYY :: Rule
 ruleDDMMYYYY = Rule
   { name = "dd/mm/yyyy"
   , pattern =
-    [ regex "((3[01]|[12]\\d|0?[1-9])[/-](0?[1-9]|1[0-2])[/-](\\d{4}))"
+    [ regex "((3[01]|[12]\\d|0?[1-9])[/-.](0?[1-9]|1[0-2])[/-.](\\d{4}))"
     ]
   , prod = \case
       (Token RegexMatch (GroupMatch (yy:mm:dd:_)):_) -> do
