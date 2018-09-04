@@ -45,6 +45,8 @@ ruleInstants = mkRuleInstants
   , ("yesterday"    , TG.Day   , - 1, "dün"                      )
   ]
 
+  
+
 ruleNow :: Rule
 ruleNow = Rule
   { name = "now"
@@ -54,60 +56,9 @@ ruleNow = Rule
     , prod = \_ -> tt now
   }
 
-ruleHHMM :: Rule
-ruleHHMM = Rule
-  { name = "hh:mm"
-  , pattern = [regex "((?:[01]?\\d)|(?:2[0-3]))[:.]([0-5]\\d)"]
-  , prod = \tokens -> case tokens of
-      (Token RegexMatch (GroupMatch (hh:mm:_)):_) -> do
-        h <- parseInt hh
-        m <- parseInt mm
-        tt $ hourMinute True h m
-      _ -> Nothing
-  }
 
-ruleHHMMSS :: Rule
-ruleHHMMSS = Rule
-  { name = "hh:mm:ss"
-  , pattern = [regex "((?:[01]?\\d)|(?:2[0-3]))[:.]([0-5]\\d)[:.]([0-5]\\d)"]
-  , prod = \tokens -> case tokens of
-      (Token RegexMatch (GroupMatch (hh:mm:ss:_)):_) -> do
-        h <- parseInt hh
-        m <- parseInt mm
-        s <- parseInt ss
-        tt $ hourMinuteSecond True h m s
-      _ -> Nothing
-  }
 
-ruleMMYYYY :: Rule
-ruleMMYYYY = Rule
-  { name = "mm/yyyy"
-  , pattern =
-    [ regex "(0?[1-9]|1[0-2])[/-](\\d{4})"
-    ]
-  , prod = \tokens -> case tokens of
-      (Token RegexMatch (GroupMatch (mm:yy:_)):_) -> do
-        y <- parseInt yy
-        m <- parseInt mm
-        tt $ yearMonthDay y m 1
-      _ -> Nothing
-  }
   
-ruleDDMMYYYY :: Rule
-ruleDDMMYYYY = Rule
-  { name = "dd/mm/yyyy"
-  , pattern =
-    [ regex "((3[01]|[12]\\d|0?[1-9])[/-.](0?[1-9]|1[0-2])[/-.](\\d{4}))"
-    ]
-  , prod = \case
-      (Token RegexMatch (GroupMatch (yy:mm:dd:_)):_) -> do
-        y <- parseInt yy
-        m <- parseInt mm
-        d <- parseInt dd
-        tt $ yearMonthDay y m d
-      _ -> Nothing
-  }
-
 rulePartOfDays :: Rule
 rulePartOfDays = Rule
   { name = "part of days"
@@ -155,6 +106,135 @@ ruleSeason = Rule
       _ -> Nothing
   }
 
+ruleDOMLatent :: Rule
+ruleDOMLatent = Rule
+    { name = "<day-of-month> (ordinal)"
+    , pattern = [Predicate isDOMOrdinal]
+    , prod = \tokens -> case tokens of
+        (token:_) -> do
+          n <- getIntValue token
+          tt . mkLatent $ dayOfMonth n
+        _ -> Nothing
+    }
+  
+ruleTheDOMNumeral :: Rule
+ruleTheDOMNumeral = Rule
+    { name = "the <day-of-month> (number)"
+    , pattern =
+      [ regex "the"
+      , Predicate isDOMInteger
+      ]
+    , prod = \tokens -> case tokens of
+        (_:token:_) -> do
+          n <- getIntValue token
+          tt . mkLatent $ dayOfMonth n
+        _ -> Nothing
+    }
+  
+ruleTheDOMOrdinal :: Rule
+ruleTheDOMOrdinal = Rule
+    { name = "the <day-of-month> (ordinal)"
+    , pattern =
+      [ regex "the"
+      , Predicate isDOMOrdinal
+      ]
+    , prod = \tokens -> case tokens of
+        (_:
+         Token Ordinal OrdinalData{TOrdinal.value = v}:
+         _) -> tt $ dayOfMonth v
+        _ -> Nothing
+    }
+  
+ruleNamedDOMOrdinal :: Rule
+ruleNamedDOMOrdinal = Rule
+    { name = "<named-month>|<named-day> <day-of-month> (ordinal)"
+    , pattern =
+      [ Predicate $ or . sequence [isAMonth, isADayOfWeek]
+      , Predicate isDOMOrdinal
+      ]
+    , prod = \tokens -> case tokens of
+        (Token Time td:token:_) -> Token Time <$> intersectDOM td token
+        _ -> Nothing
+    }
+  
+ruleMonthDOMNumeral :: Rule
+ruleMonthDOMNumeral = Rule
+    { name = "<named-month> <day-of-month> (non ordinal)"
+    , pattern =
+      [ Predicate isAMonth
+      , Predicate isDOMInteger
+      ]
+    , prod = \tokens -> case tokens of
+        (Token Time td:token:_) -> Token Time <$> intersectDOM td token
+        _ -> Nothing
+    }
+  
+ruleDOMOfMonth :: Rule
+ruleDOMOfMonth = Rule
+    { name = "<day-of-month> (ordinal or number) of <named-month>"
+    , pattern =
+      [ Predicate isDOMValue
+      , regex "of|in"
+      , Predicate isAMonth
+      ]
+    , prod = \tokens -> case tokens of
+        (token:_:Token Time td:_) -> Token Time <$> intersectDOM td token
+        _ -> Nothing
+    }
+  
+ruleDOMMonth :: Rule
+ruleDOMMonth = Rule
+    { name = "<day-of-month> (ordinal or number) <named-month>"
+    , pattern =
+      [ Predicate isDOMValue
+      , Predicate isAMonth
+      ]
+    , prod = \tokens -> case tokens of
+        (token:Token Time td:_) -> Token Time <$> intersectDOM td token
+        _ -> Nothing
+    }
+  
+ruleDOMMonthYear :: Rule
+ruleDOMMonthYear = Rule
+    { name = "<day-of-month>(ordinal or number)/<named-month>/year"
+    , pattern =
+      [ Predicate isDOMValue
+      , regex "[-/\\s]"
+      , Predicate isAMonth
+      , regex "[-/\\s]"
+      , regex "(\\d{4})"
+      ]
+    , prod = \tokens -> case tokens of
+        (token:
+         _:
+         Token Time td:
+         _:
+         Token RegexMatch (GroupMatch (match:_)):
+         _) -> do
+           intVal <- parseInt match
+           dom <- intersectDOM td token
+           Token Time <$> intersect dom (year intVal)
+        _ -> Nothing
+    }
+  
+ruleDOMOrdinalMonthYear :: Rule
+ruleDOMOrdinalMonthYear = Rule
+    { name = "<day-of-month>(ordinal) <named-month> year"
+    , pattern =
+      [ Predicate isDOMOrdinal
+      , Predicate isAMonth
+      , regex "(\\d{2,4})"
+      ]
+    , prod = \tokens -> case tokens of
+        (token:Token Time td:Token RegexMatch (GroupMatch (match:_)):_) -> do
+          intVal <- parseInt match
+          dom <- intersectDOM td token
+          Token Time <$> intersect dom (year intVal)
+        _ -> Nothing
+    }
+
+
+
 ruleSeasons :: [Rule]
 ruleSeasons = mkRuleSeasons
   [ ( "summer", "yaz"      , monthDay  6 21, monthDay  9 23 )
@@ -190,17 +270,173 @@ ruleMonths = mkRuleMonthsWithLatent
   , ( "December" , "aralık|ara\\.?"     , False )
   ]
 
+ruleHHMM :: Rule
+ruleHHMM = Rule
+    { name = "hh:mm"
+    , pattern = [regex "((?:[01]?\\d)|(?:2[0-3]))[:.]([0-5]\\d)"]
+    , prod = \tokens -> case tokens of
+        (Token RegexMatch (GroupMatch (hh:mm:_)):_) -> do
+          h <- parseInt hh
+          m <- parseInt mm
+          tt $ hourMinute True h m
+        _ -> Nothing
+    }
+
+ruleHHMMLatent :: Rule
+ruleHHMMLatent = Rule
+      { name = "hhmm (latent)"
+      , pattern =
+        [ regex "((?:[01]?\\d)|(?:2[0-3]))([0-5]\\d)(?!.\\d)"
+        ]
+      , prod = \tokens -> case tokens of
+          (Token RegexMatch (GroupMatch (hh:mm:_)):_) -> do
+            h <- parseInt hh
+            m <- parseInt mm
+            tt . mkLatent $ hourMinute True h m
+          _ -> Nothing
+      }
+    
+  
+ruleHHMMSS :: Rule
+ruleHHMMSS = Rule
+    { name = "hh:mm:ss"
+    , pattern = [regex "((?:[01]?\\d)|(?:2[0-3]))[:.]([0-5]\\d)[:.]([0-5]\\d)"]
+    , prod = \tokens -> case tokens of
+        (Token RegexMatch (GroupMatch (hh:mm:ss:_)):_) -> do
+          h <- parseInt hh
+          m <- parseInt mm
+          s <- parseInt ss
+          tt $ hourMinuteSecond True h m s
+        _ -> Nothing
+    }  
+  
+ruleMMYYYY :: Rule
+ruleMMYYYY = Rule
+      { name = "mm/yyyy"
+      , pattern =
+        [ regex "(0?[1-9]|1[0-2])[/-](\\d{4})"
+        ]
+      , prod = \tokens -> case tokens of
+          (Token RegexMatch (GroupMatch (mm:yy:_)):_) -> do
+            y <- parseInt yy
+            m <- parseInt mm
+            tt $ yearMonthDay y m 1
+          _ -> Nothing
+      }
+    
+ruleYYYYMMDD :: Rule
+ruleYYYYMMDD = Rule
+    { name = "yyyy-mm-dd"
+    , pattern =
+      [ regex "(\\d{2,4})-(0?[1-9]|1[0-2])-(3[01]|[12]\\d|0?[1-9])"
+      ]
+    , prod = \case
+        (Token RegexMatch (GroupMatch (yy:mm:dd:_)):_) -> do
+          y <- parseInt yy
+          m <- parseInt mm
+          d <- parseInt dd
+          tt $ yearMonthDay y m d
+        _ -> Nothing
+    }
+
+
+ruleDDMM :: Rule
+ruleDDMM = Rule
+      { name = "dd/mm"
+      , pattern =
+        [ regex "(3[01]|[12]\\d|0?[1-9])\\s?[/-]\\s?(1[0-2]|0?[1-9])"
+        ]
+      , prod = \tokens -> case tokens of
+          (Token RegexMatch (GroupMatch (dd:mm:_)):_) -> do
+            d <- parseInt dd
+            m <- parseInt mm
+            tt $ monthDay m d
+          _ -> Nothing
+      }
+    
+ruleDDMMYYYY :: Rule
+ruleDDMMYYYY = Rule
+      { name = "dd/mm/yyyy"
+      , pattern =
+        [ regex "(3[01]|[12]\\d|0?[1-9])[-/\\s](1[0-2]|0?[1-9])[-/\\s](\\d{2,4})"
+        ]
+      , prod = \tokens -> case tokens of
+          (Token RegexMatch (GroupMatch (dd:mm:yy:_)):_) -> do
+            y <- parseInt yy
+            d <- parseInt dd
+            m <- parseInt mm
+            tt $ yearMonthDay y m d
+          _ -> Nothing
+      }
+    
+    -- Clashes with HHMMSS, hence only 4-digit years
+ruleDDMMYYYYDot :: Rule
+ruleDDMMYYYYDot = Rule
+      { name = "dd.mm.yyyy"
+      , pattern =
+        [ regex "(3[01]|[12]\\d|0?[1-9])\\.(1[0-2]|0?[1-9])\\.(\\d{4})"
+        ]
+      , prod = \tokens -> case tokens of
+          (Token RegexMatch (GroupMatch (dd:mm:yy:_)):_) -> do
+            y <- parseInt yy
+            d <- parseInt dd
+            m <- parseInt mm
+            tt $ yearMonthDay y m d
+          _ -> Nothing
+      }
+
+ruleTODLatent :: Rule
+ruleTODLatent = Rule
+  { name = "time-of-day (latent)"
+  , pattern =
+    [ Predicate $ isIntegerBetween 0 23
+    ]
+  , prod = \tokens -> case tokens of
+      (token:_) -> do
+        n <- getIntValue token
+        tt . mkLatent $ hour (n < 13) n
+      _ -> Nothing
+  }
+      
+
+ruleAtTOD :: Rule
+ruleAtTOD = Rule
+      { name = "saat <time-of-day>"
+      , pattern =
+        [ regex "saat|@"
+        , Predicate isATimeOfDay
+        ]
+      , prod = \tokens -> case tokens of
+          (_:Token Time td:_) -> tt $ notLatent td
+          _ -> Nothing
+      }
+      
 rules :: [Rule]
 rules =
   [ 
     ruleNow
     , ruleHHMM
     , ruleHHMMSS
-    , ruleMMYYYY
-    , ruleDDMMYYYY
     , rulePartOfDays
     , ruleWeekend
     , ruleSeason
+    , ruleDOMLatent
+    , ruleTheDOMNumeral
+    , ruleTheDOMOrdinal
+    , ruleNamedDOMOrdinal
+    , ruleMonthDOMNumeral
+    , ruleDOMOfMonth
+    , ruleDOMMonth
+    , ruleDOMMonthYear
+    , ruleDOMOrdinalMonthYear
+    , ruleMMYYYY
+    , ruleYYYYMMDD
+    , ruleHHMMLatent
+    , ruleTODLatent
+    , ruleAtTOD
+    , ruleDDMM
+    , ruleDDMMYYYY
+    , ruleDDMMYYYYDot
   ]
   ++ ruleInstants
   ++ ruleDaysOfWeek
